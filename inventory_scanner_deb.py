@@ -64,60 +64,75 @@ class InventoryKiosk:
 
     def nfc_hardware_loop(self):
         """Runs in the background, handling the blocking NFC connection."""
-        clf = None
-        for path in ['tty:serial0', 'usb']:
-            try:
-                clf = nfc.ContactlessFrontend(path)
-                break
-            except IOError:
-                continue
-                
-        if not clf:
-            self.status_var.set("Hardware Error! Check NFC Reader.")
-            self.log("ERROR: Could not connect to NFC hardware.")
-            return
-
-        self.status_var.set("System Live. Tap an item to scan.")
-        self.log("NFC Scanner initialized and waiting...")
-
+        self.status_var.set("Hardware Error! Check NFC Reader.")
+        
         while True:
-            # 1. Check if the UI requested a tag to be formatted/flashed
-            if not self.write_queue.empty():
-                write_data = self.write_queue.get()
-                self.status_var.set("FLASHING: Hold tag to reader...")
-                
-                def on_connect_write(tag):
-                    if tag.ndef:
-                        tag.ndef.records = [ndef.TextRecord(write_data['uuid'])]
+            clf = None
+            # Attempt to connect/reconnect
+            for path in ['tty:serial0', 'usb']:
+                try:
+                    clf = nfc.ContactlessFrontend(path)
+                    if clf: break
+                except IOError:
+                    continue
+                    
+            if not clf:
+                self.log("ERROR: Could not connect to NFC hardware. Retrying in 3s...")
+                time.sleep(3)
+                continue # Loop back and try connecting again
+
+            self.status_var.set("System Live. Tap an item to scan.")
+            self.log("NFC Scanner connected and ready.")
+
+            try:
+                # Keep scanning as long as the hardware is connected
+                while True:
+                    # 1. Check if the UI requested a tag to be formatted/flashed
+                    if not self.write_queue.empty():
+                        write_data = self.write_queue.get()
+                        self.status_var.set("FLASHING: Hold tag to reader...")
+                        
+                        def on_connect_write(tag):
+                            if tag.ndef:
+                                tag.ndef.records = [ndef.TextRecord(write_data['uuid'])]
+                                return True
+                            return False
+                        
+                        clf.connect(rdwr={'on-connect': on_connect_write})
+                        self.log(f"Successfully flashed tag with UUID: {write_data['uuid']}")
+                        self.status_var.set("System Live. Tap an item to scan.")
+                        time.sleep(1)
+                        continue
+
+                    # 2. Normal Read Mode
+                    def on_connect_read(tag):
+                        tag_uuid = None
+                        if tag.ndef and len(tag.ndef.records) > 0:
+                            for record in tag.ndef.records:
+                                if isinstance(record, ndef.TextRecord):
+                                    tag_uuid = record.text
+                                    break
+                        self.read_queue.put(tag_uuid)
+                        # Returning True makes the script wait until the tag is physically removed
+                        # before continuing. This prevents rapid double-scans.
                         return True
-                    return False
-                
-                clf.connect(rdwr={'on-connect': on_connect_write})
-                self.log(f"Successfully flashed tag with UUID: {write_data['uuid']}")
-                self.status_var.set("System Live. Tap an item to scan.")
-                time.sleep(1)
-                continue
 
-            # 2. Normal Read Mode
-            def on_connect_read(tag):
-                tag_uuid = None
-                if tag.ndef and len(tag.ndef.records) > 0:
-                    for record in tag.ndef.records:
-                        if isinstance(record, ndef.TextRecord):
-                            tag_uuid = record.text
-                            break
-                # Send the result to the UI thread
-                self.read_queue.put(tag_uuid)
-                return True
-
-            # The 'terminate' argument ensures the scanner stops blocking 
-            # immediately if the UI needs to write a new tag.
-            clf.connect(
-                rdwr={'on-connect': on_connect_read},
-                terminate=lambda: not self.write_queue.empty()
-            )
-            time.sleep(0.5) # Debounce to prevent rapid double-scans
-
+                    clf.connect(
+                        rdwr={'on-connect': on_connect_read},
+                        terminate=lambda: not self.write_queue.empty()
+                    )
+                    time.sleep(0.5) 
+                    
+            except Exception as e:
+                # If the USB connection drops or errors out, catch it here.
+                self.log(f"Hardware connection lost: {e}")
+                self.status_var.set("Reconnecting Scanner...")
+            finally:
+                if clf:
+                    clf.close()
+            
+            # Brief pause before attempting hardware reconnection
+            time.sleep(1)
     def process_ui_queue(self):
         """Checks if the background thread has passed along a scanned tag."""
         try:
