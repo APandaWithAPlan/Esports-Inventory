@@ -20,10 +20,32 @@ class AppGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("NFC Inventory Management System")
-        self.root.geometry("1920x1080")
+        self.root.geometry("1024x768") # Adjusted for standard screens, change back to 1920x1080 if needed
         
-        self.text_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled', font=("Consolas", 10))
-        self.text_area.pack(expand=True, fill='both', padx=10, pady=10)
+        self.cart = [] # Store items to be rented together
+
+        # --- Layout Setup ---
+        # Left side: Logs
+        self.left_frame = tk.Frame(root)
+        self.left_frame.pack(side=tk.LEFT, expand=True, fill='both', padx=10, pady=10)
+        
+        self.text_area = scrolledtext.ScrolledText(self.left_frame, wrap=tk.WORD, state='disabled', font=("Consolas", 10))
+        self.text_area.pack(expand=True, fill='both')
+
+        # Right side: Cart UI
+        self.right_frame = tk.Frame(root, width=300)
+        self.right_frame.pack(side=tk.RIGHT, fill='y', padx=10, pady=10)
+        
+        tk.Label(self.right_frame, text="Rental Cart", font=("Consolas", 14, "bold")).pack(pady=(0, 10))
+        
+        self.cart_listbox = tk.Listbox(self.right_frame, font=("Consolas", 12), width=25)
+        self.cart_listbox.pack(expand=True, fill='y', pady=5)
+        
+        self.checkout_btn = tk.Button(self.right_frame, text="Checkout Cart", command=self.checkout_cart_thread, bg="#28a745", fg="white", font=("Consolas", 12, "bold"))
+        self.checkout_btn.pack(fill='x', pady=5)
+
+        self.clear_btn = tk.Button(self.right_frame, text="Clear Cart", command=self.clear_cart, bg="#dc3545", fg="white", font=("Consolas", 12, "bold"))
+        self.clear_btn.pack(fill='x', pady=5)
 
         # Event flags to pause the background thread while waiting for UI input
         self.event = threading.Event()
@@ -58,6 +80,72 @@ class AppGUI:
         self.result = messagebox.askyesno(title, prompt, parent=self.root)
         self.event.set()
 
+    # --- Cart Operations ---
+    def add_to_cart(self, item):
+        if any(cart_item['id'] == item['id'] for cart_item in self.cart):
+            self.log(f"[*] {item['name']} is already in the cart!")
+            return
+        self.cart.append(item)
+        self.cart_listbox.insert(tk.END, item['name'])
+        self.log(f"[+] Added '{item['name']}' to cart.")
+
+    def clear_cart(self):
+        self.cart.clear()
+        self.cart_listbox.delete(0, tk.END)
+        self.log("[-] Cart cleared.")
+
+    def checkout_cart_thread(self):
+        if not self.cart:
+            messagebox.showwarning("Empty Cart", "The cart is empty! Scan items first.")
+            return
+        # Run checkout in background to not freeze UI during DB operations
+        threading.Thread(target=self._process_checkout, daemon=True).start()
+
+    def _process_checkout(self):
+        self.log("\n[WAIT] Waiting for user input for Checkout...")
+        u_id = self.ask_string("User ID Scan", f"Checking out {len(self.cart)} items.\nPlease enter or scan the USER CARD ID now:")
+        
+        if not u_id:
+            self.log("Checkout cancelled.")
+            return
+
+        if len(u_id) > 9:
+            u_id = u_id[1:9]
+
+        user = get_user(u_id) or register_user(u_id)
+        if not user:
+            self.log("Checkout failed: Could not fetch/register user.")
+            return
+
+        current_items = user.get('currently_renting') or []
+        new_item_ids = [item['id'] for item in self.cart if item['id'] not in current_items]
+        
+        if not new_item_ids:
+            self.log("All items in cart are already checked out to this user.")
+            self.root.after(0, self.clear_cart)
+            return
+
+        # 1. Update User's currently_renting list once
+        current_items.extend(new_item_ids)
+        supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
+
+        # 2. Update each Inventory item
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for item in self.cart:
+            if item['id'] in new_item_ids:
+                history = item.get('rental_history') or []
+                history.append(f"{user['name']}/{current_time}/PENDING")
+                
+                supabase.table("Inventory").update({
+                    "is_rented": True,
+                    "last_rented_person": user['name'],
+                    "rental_history": history
+                }).eq("id", item['id']).execute()
+        
+        self.log(f"\n[SUCCESS] Checked out {len(new_item_ids)} item(s) to {user['name']}.")
+        self.root.after(0, self.clear_cart)
+
+
 # --- Core Logic ---
 def get_user(user_id: str):
     res = supabase.table("Users").select("*").eq("id", user_id).execute()
@@ -86,72 +174,40 @@ def handle_existing_item(item):
     if renter:
         gui.log(f"STATUS: [ RENTED ] to {renter['name']}")
         
-        choice = gui.ask_yes_no("Return Item", f"Item '{item['name']}' is rented by {renter['name']}.\n\nDo you want to process a Return (Check-in)?")
+        # Returns are still handled individually immediately upon scanning
+        choice = gui.ask_yes_no("Return Item", f"Item '{item['name']}' is rented by {renter['name']}.\n\nProcess a Return (Check-in)?")
         if choice:
-            condition = gui.ask_string("Item Condition", f"Would you like to update the condition of '{item['name']}' on return?\n(e.g., Good, Scratched, Damaged):")
+            condition = gui.ask_string("Item Condition", f"Update condition of '{item['name']}' on return?\n(e.g., Good, Scratched, Damaged):")
             if condition is None: 
                 condition = "Not specified"
 
-            # Update Rental History with Return Date
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
             history = item.get('rental_history') or []
             if history:
-                # Replace the PENDING status of the last rental segment with the return time
                 history[-1] = history[-1].replace("PENDING", current_time)
 
             new_list = [i for i in renter['currently_renting'] if i != item['id']]
             supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
             
+            update_payload = {
+                "is_rented": False,
+                "rental_history": history
+            }
             if condition != "":
-                supabase.table("Inventory").update({
-                    "is_rented": False,
-                    "condition": condition,
-                    "rental_history": history
-                }).eq("id", item['id']).execute()
-            else:
-                supabase.table("Inventory").update({
-                    "is_rented": False,
-                    "rental_history": history
-                }).eq("id", item['id']).execute()
-            
+                update_payload["condition"] = condition
+
+            supabase.table("Inventory").update(update_payload).eq("id", item['id']).execute()
             gui.log(f"Item '{item['name']}' returned. Condition logged as: {condition}.")
             
     else:
         current_condition = item.get('condition', 'Not specified')
         gui.log(f"STATUS: [ AVAILABLE ] (Last Renter: {item.get('last_rented_person', 'None')})")
-        gui.log(f"CONDITION: {current_condition}") # Display Condition to User
+        gui.log(f"CONDITION: {current_condition}")
         
-        choice = gui.ask_yes_no("Rent Item", f"Item '{item['name']}' is available.\n\nRent out to a user?")
+        # Instead of asking for a User immediately, we add to Cart
+        choice = gui.ask_yes_no("Add to Cart", f"Item '{item['name']}' is available.\n\nAdd to checkout cart?")
         if choice:
-            gui.log("\n[WAIT] Waiting for user input...")
-            u_id = gui.ask_string("User ID Scan", "Please enter or scan the USER CARD ID now:")
-            
-            if u_id:
-                if len(u_id) > 9:
-                    u_id = u_id[1:9]
-
-                user = get_user(u_id) or register_user(u_id)
-                
-                if user:
-                    current_items = user.get('currently_renting') or []
-                    if item['id'] not in current_items:
-                        current_items.append(item['id'])
-                        supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
-                        
-                        # Add New Rental Event to History
-                        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        history = item.get('rental_history') or []
-                        history.append(f"{user['name']}/{current_time}/PENDING")
-
-                        supabase.table("Inventory").update({
-                            "is_rented": True,
-                            "last_rented_person": user['name'],
-                            "rental_history": history
-                        }).eq("id", item['id']).execute()
-                        
-                        gui.log(f"Success: {item['name']} rented to {user['name']}.")
-                    else:
-                        gui.log("User already has this item checked out!")
+            gui.root.after(0, gui.add_to_cart, item)
 
 def process_tag(tag):
     tag_uuid = None
