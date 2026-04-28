@@ -4,18 +4,60 @@ import nfc
 import ndef
 import time
 import threading
-import queue
 import tkinter as tk
-from tkinter import simpledialog, messagebox, scrolledtext
+from tkinter import scrolledtext, simpledialog, messagebox
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-# --- Database Setup ---
 load_dotenv()
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
+# --- Thread-Safe GUI Helper ---
+class AppGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("NFC Inventory Management System")
+        self.root.geometry("650x450")
+        
+        self.text_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled', font=("Consolas", 10))
+        self.text_area.pack(expand=True, fill='both', padx=10, pady=10)
+
+        # Event flags to pause the background thread while waiting for UI input
+        self.event = threading.Event()
+        self.result = None
+
+    def log(self, msg):
+        self.root.after(0, self._log_gui, msg)
+
+    def _log_gui(self, msg):
+        self.text_area.configure(state='normal')
+        self.text_area.insert(tk.END, str(msg) + "\n")
+        self.text_area.see(tk.END)
+        self.text_area.configure(state='disabled')
+
+    def ask_string(self, title, prompt):
+        self.event.clear()
+        self.root.after(0, self._ask_string_gui, title, prompt)
+        self.event.wait()
+        return self.result
+
+    def _ask_string_gui(self, title, prompt):
+        self.result = simpledialog.askstring(title, prompt, parent=self.root)
+        self.event.set()
+
+    def ask_yes_no(self, title, prompt):
+        self.event.clear()
+        self.root.after(0, self._ask_yes_no_gui, title, prompt)
+        self.event.wait()
+        return self.result
+
+    def _ask_yes_no_gui(self, title, prompt):
+        self.result = messagebox.askyesno(title, prompt, parent=self.root)
+        self.event.set()
+
+# --- Core Logic ---
 def get_user(user_id: str):
     res = supabase.table("Users").select("*").eq("id", user_id).execute()
     return res.data[0] if res.data else None
@@ -24,202 +66,152 @@ def get_item(item_uuid: str):
     res = supabase.table("Inventory").select("*").eq("id", item_uuid).execute()
     return res.data[0] if res.data else None
 
-def register_user_db(user_id: str, name: str):
-    supabase.table("Users").insert({"id": user_id, "name": name, "currently_renting": []}).execute()
-    return {"id": user_id, "name": name, "currently_renting": []}
+def register_user(user_id: str):
+    gui.log(f"\n[!] User ID {user_id} not found.")
+    name = gui.ask_string("Register New User", "Enter Name for new User registration:")
+    if name:
+        supabase.table("Users").insert({"id": user_id, "name": name, "currently_renting": []}).execute()
+        gui.log(f"User {name} registered!")
+        return {"id": user_id, "name": name, "currently_renting": []}
+    return None
 
+def handle_existing_item(item):
+    gui.log(f"\n--- Item Details ---")
+    gui.log(f"Name: {item['name']}")
+    
+    renter_res = supabase.table("Users").select("*").contains("currently_renting", [item['id']]).execute()
+    renter = renter_res.data[0] if renter_res.data else None
 
-# --- Responsive GUI Application ---
-class InventoryKiosk:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("NFC Inventory Kiosk")
-        self.root.geometry("650x500")
+    if renter:
+        gui.log(f"STATUS: [ RENTED ] to {renter['name']}")
         
-        # UI Elements
-        self.status_var = tk.StringVar(value="Initializing Hardware...")
-        self.header = tk.Label(root, textvariable=self.status_var, font=("Helvetica", 16, "bold"), pady=15)
-        self.header.pack()
-        
-        self.log_area = scrolledtext.ScrolledText(root, width=70, height=20, state='disabled', font=("Courier", 10))
-        self.log_area.pack(padx=20, pady=10)
-        
-        # Communication Queues
-        self.read_queue = queue.Queue()
-        self.write_queue = queue.Queue()
-        
-        # Start background NFC Thread
-        self.nfc_thread = threading.Thread(target=self.nfc_hardware_loop, daemon=True)
-        self.nfc_thread.start()
-        
-        # Start polling the queue to update UI
-        self.root.after(100, self.process_ui_queue)
+        choice = gui.ask_yes_no("Return Item", f"Item '{item['name']}' is rented by {renter['name']}.\n\nDo you want to process a Return (Check-in)?")
+        if choice:
+            # Added condition prompt
+            condition = gui.ask_string("Item Condition", f"Enter condition of '{item['name']}' on return\n(e.g., Good, Scratched, Damaged):")
+            if condition is None: 
+                condition = "Not specified"
 
-    def log(self, message):
-        """Safely print messages to the GUI text box."""
-        self.log_area.config(state='normal')
-        self.log_area.insert(tk.END, f"> {message}\n")
-        self.log_area.see(tk.END)
-        self.log_area.config(state='disabled')
-
-    def nfc_hardware_loop(self):
-        """Runs in the background, handling the blocking NFC connection."""
-        self.status_var.set("Initializing Hardware...")
+            new_list = [i for i in renter['currently_renting'] if i != item['id']]
+            supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
+            
+            supabase.table("Inventory").update({
+                "is_rented": False,
+                "condition": condition # Condition updated here
+            }).eq("id", item['id']).execute()
+            
+            gui.log(f"Item '{item['name']}' returned. Condition logged as: {condition}.")
+            
+    else:
+        gui.log(f"STATUS: [ AVAILABLE ] (Last Renter: {item.get('last_rented_person', 'None')})")
         
-        while True:
-            clf = None
-            try:
-                # 1. Connect to hardware
-                for path in ['usb', 'tty:serial0']:
-                    try:
-                        clf = nfc.ContactlessFrontend(path)
-                        if clf: break
-                    except IOError:
-                        continue
+        choice = gui.ask_yes_no("Rent Item", f"Item '{item['name']}' is available.\n\nRent out to a user?")
+        if choice:
+            gui.log("\n[WAIT] Waiting for user input...")
+            u_id = gui.ask_string("User ID Scan", "Please enter or scan the USER CARD ID now:")
+            
+            if u_id:
+                if len(u_id) > 9:
+                    u_id = u_id[1:9]
+
+                user = get_user(u_id) or register_user(u_id)
                 
-                if not clf:
-                    self.log("ERROR: NFC hardware not found. Retrying in 3s...")
-                    time.sleep(3)
-                    continue
+                if user:
+                    current_items = user.get('currently_renting') or []
+                    if item['id'] not in current_items:
+                        current_items.append(item['id'])
+                        supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
+                        
+                        supabase.table("Inventory").update({
+                            "is_rented": True,
+                            "last_rented_person": user['name'] 
+                        }).eq("id", item['id']).execute()
+                        
+                        gui.log(f"Success: {item['name']} rented to {user['name']}.")
+                    else:
+                        gui.log("User already has this item checked out!")
 
-                self.status_var.set("System Live. Tap an item to scan.")
+def process_tag(tag):
+    tag_uuid = None
+    if tag.ndef and len(tag.ndef.records) > 0:
+        for record in tag.ndef.records:
+            if isinstance(record, ndef.TextRecord):
+                tag_uuid = record.text
+                break
 
-                # 2. Check if we need to write
-                if not self.write_queue.empty():
-                    write_data = self.write_queue.get()
-                    self.status_var.set("FLASHING: Hold tag to reader...")
-                    
-                    def on_connect_write(tag):
-                        if tag.ndef:
-                            tag.ndef.records = [ndef.TextRecord(write_data['uuid'])]
-                            return True
-                        return False
-                    
-                    clf.connect(rdwr={'on-connect': on_connect_write})
-                    self.log(f"Successfully flashed tag with UUID: {write_data['uuid']}")
-                    self.status_var.set("System Live. Tap an item to scan.")
-                    time.sleep(1)
-
-                # 3. Read Mode
-                else:
-                    def on_connect_read(tag):
-                        tag_uuid = None
-                        if tag.ndef and len(tag.ndef.records) > 0:
-                            for record in tag.ndef.records:
-                                if isinstance(record, ndef.TextRecord):
-                                    tag_uuid = record.text
-                                    break
-                        self.read_queue.put(tag_uuid)
-                        return False # Drop instantly
-
-                    # We use terminate to ensure the reader doesn't sit blocked forever.
-                    # It will poll for 1 second, then release so the loop can restart.
-                    clf.connect(
-                        rdwr={'on-connect': on_connect_read},
-                        terminate=lambda: not self.write_queue.empty()
-                    )
-                    time.sleep(0.5)
-
-            except Exception as e:
-                self.log(f"Hardware reset: {e}")
-            finally:
-                # NUCLEAR OPTION: Forcefully close the USB connection every single cycle.
-                # This guarantees the reader cannot get permanently stuck on a red light.
-                if clf:
-                    clf.close()
-            
-            time.sleep(0.5)
-            
-    def process_ui_queue(self):
-        """Checks if the background thread has passed along a scanned tag."""
-        try:
-            tag_uuid = self.read_queue.get_nowait()
-            self.handle_scanned_tag(tag_uuid)
-        except queue.Empty:
-            pass
-        finally:
-            self.root.after(100, self.process_ui_queue)
-
-    def handle_scanned_tag(self, tag_uuid):
-        if not tag_uuid:
-            if messagebox.askyesno("Blank Tag", "This tag is blank. Register as new item?"):
-                self.register_new_item()
-            return
-
+    if tag_uuid:
         item = get_item(tag_uuid)
         if item:
-            self.process_existing_item(item)
+            handle_existing_item(item)
         else:
-            self.log(f"Unrecognized UUID: {tag_uuid}")
-            if messagebox.askyesno("Unknown Tag", "This tag is not in the database. Register it?"):
-                self.register_new_item(tag_uuid)
+            gui.log(f"Unrecognized UUID: {tag_uuid}")
+            if gui.ask_yes_no("New Item", "Unrecognized Tag.\nRegister as a new inventory item?"):
+                flash_new_item(tag, tag_uuid)
+    else:
+        flash_new_item(tag)
 
-    def process_existing_item(self, item):
-        renter_res = supabase.table("Users").select("*").contains("currently_renting", [item['id']]).execute()
-        renter = renter_res.data[0] if renter_res.data else None
+def flash_new_item(tag, existing_uuid=None):
+    new_uuid = existing_uuid or str(uuid.uuid4())
+    name = gui.ask_string("Register Item", "Enter name for NEW inventory item:")
+    if not name: 
+        gui.log("Registration cancelled.")
+        return
 
-        if renter:
-            if messagebox.askyesno("Check In", f"[{item['name']}] is currently checked out to {renter['name']}.\n\nReturn this item?"):
-                new_list = [i for i in renter['currently_renting'] if i != item['id']]
-                supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
-                supabase.table("Inventory").update({"is_rented": False}).eq("id", item['id']).execute()
-                self.log(f"RETURNED: {item['name']}")
-                
-        else:
-            last_renter = item.get('last_rented_person', 'None')
-            if messagebox.askyesno("Check Out", f"[{item['name']}] is available. (Last renter: {last_renter})\n\nCheck out this item?"):
-                self.process_rental(item)
+    try:
+        if tag.ndef:
+            tag.ndef.records = [ndef.TextRecord(new_uuid)]
+            supabase.table("Inventory").insert({"id": new_uuid, "name": name}).execute()
+            gui.log(f"Tag flashed and Item '{name}' saved.")
+    except Exception as e:
+        gui.log(f"Flashing error: {e}")
 
-    def process_rental(self, item):
-        u_id = simpledialog.askstring("User Identification", "Scan or enter the User ID:")
-        if not u_id:
-            return # User cancelled
+# --- Background NFC Hardware Loop ---
+def nfc_worker():
+    clf = None
+    # Common connection paths for Raspberry Pi
+    # tty:serial0 -> Standard UART pinout on Raspberry Pi
+    # usb -> Standard USB connection
+    connection_paths = ['tty:serial0', 'usb']
+    
+    for path in connection_paths:
+        try:
+            gui.log(f"Attempting to connect to NFC reader via {path}...")
+            clf = nfc.ContactlessFrontend(path)
+            if clf:
+                gui.log(f"Successfully connected via {path}.")
+                break
+        except IOError:
+            continue
             
-        if len(u_id) > 9:
-            u_id = u_id[1:9]
+    if not clf:
+        gui.log("Hardware Error: Could not connect to NFC reader. Check wiring, permissions, or raspi-config.")
+        return
 
-        user = get_user(u_id)
-        if not user:
-            name = simpledialog.askstring("New User", f"User ID '{u_id}' not found.\nEnter Name to register new user:")
-            if name:
-                user = register_user_db(u_id, name)
-                self.log(f"Registered new user: {name}")
-            else:
-                return
-
-        if user:
-            current_items = user.get('currently_renting') or []
-            if item['id'] not in current_items:
-                current_items.append(item['id'])
-                supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
-                supabase.table("Inventory").update({
-                    "is_rented": True,
-                    "last_rented_person": user['name'] 
-                }).eq("id", item['id']).execute()
-                
-                self.log(f"RENTED: {item['name']} -> {user['name']}.")
-            else:
-                messagebox.showinfo("Notice", "User already has this item checked out.")
-
-    def register_new_item(self, existing_uuid=None):
-        new_uuid = existing_uuid or str(uuid.uuid4())
-        name = simpledialog.askstring("New Item", "Enter the name for this new inventory item:")
-        
-        if name:
-            try:
-                supabase.table("Inventory").insert({"id": new_uuid, "name": name}).execute()
-                self.log(f"Database updated with new item: {name}")
-                
-                if not existing_uuid:
-                    self.log("Awaiting tag tap to flash new UUID...")
-                    self.write_queue.put({'uuid': new_uuid})
-                    
-            except Exception as e:
-                self.log(f"Database Error: {e}")
-                messagebox.showerror("Error", "Failed to save item to database.")
+    try:
+        gui.log("\nInventory System Live. Scan NTAG215 to begin.")
+        while True:
+            tag = clf.connect(rdwr={'on-connect': lambda tag: False})
+            if tag:
+                process_tag(tag)
+                gui.log("\nReady for next tag...")
+            time.sleep(1)
+    except Exception as e:
+        gui.log(f"\nClosing or Error: {e}")
+    finally:
+        if clf:
+            clf.close()
 
 if __name__ == "__main__":
-    # Tkinter must be run on the main thread
+    # Setup the Tkinter Root
     root = tk.Tk()
-    app = InventoryKiosk(root)
+    
+    # Initialize Global GUI controller
+    gui = AppGUI(root)
+    
+    # Start NFC scanning in a background daemon thread 
+    # (Daemon ensures the thread dies when you close the GUI window)
+    worker_thread = threading.Thread(target=nfc_worker, daemon=True)
+    worker_thread.start()
+    
+    # Start the Tkinter main loop
     root.mainloop()
