@@ -6,6 +6,7 @@ import time
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox
+from datetime import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
@@ -87,23 +88,32 @@ def handle_existing_item(item):
         
         choice = gui.ask_yes_no("Return Item", f"Item '{item['name']}' is rented by {renter['name']}.\n\nDo you want to process a Return (Check-in)?")
         if choice:
-            # Added condition prompt
             condition = gui.ask_string("Item Condition", f"Enter condition of '{item['name']}' on return\n(e.g., Good, Scratched, Damaged):")
             if condition is None: 
                 condition = "Not specified"
+
+            # Update Rental History with Return Date
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+            history = item.get('rental_history') or []
+            if history:
+                # Replace the PENDING status of the last rental segment with the return time
+                history[-1] = history[-1].replace("PENDING", current_time)
 
             new_list = [i for i in renter['currently_renting'] if i != item['id']]
             supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
             
             supabase.table("Inventory").update({
                 "is_rented": False,
-                "condition": condition # Condition updated here
+                "condition": condition,
+                "rental_history": history
             }).eq("id", item['id']).execute()
             
             gui.log(f"Item '{item['name']}' returned. Condition logged as: {condition}.")
             
     else:
+        current_condition = item.get('condition', 'Not specified')
         gui.log(f"STATUS: [ AVAILABLE ] (Last Renter: {item.get('last_rented_person', 'None')})")
+        gui.log(f"CONDITION: {current_condition}") # Display Condition to User
         
         choice = gui.ask_yes_no("Rent Item", f"Item '{item['name']}' is available.\n\nRent out to a user?")
         if choice:
@@ -122,9 +132,15 @@ def handle_existing_item(item):
                         current_items.append(item['id'])
                         supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
                         
+                        # Add New Rental Event to History
+                        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        history = item.get('rental_history') or []
+                        history.append(f"{user['name']}/{current_time}/PENDING")
+
                         supabase.table("Inventory").update({
                             "is_rented": True,
-                            "last_rented_person": user['name'] 
+                            "last_rented_person": user['name'],
+                            "rental_history": history
                         }).eq("id", item['id']).execute()
                         
                         gui.log(f"Success: {item['name']} rented to {user['name']}.")
@@ -160,7 +176,12 @@ def flash_new_item(tag, existing_uuid=None):
     try:
         if tag.ndef:
             tag.ndef.records = [ndef.TextRecord(new_uuid)]
-            supabase.table("Inventory").insert({"id": new_uuid, "name": name}).execute()
+            supabase.table("Inventory").insert({
+                "id": new_uuid, 
+                "name": name,
+                "condition": "New", 
+                "rental_history": []
+            }).execute()
             gui.log(f"Tag flashed and Item '{name}' saved.")
     except Exception as e:
         gui.log(f"Flashing error: {e}")
@@ -168,9 +189,6 @@ def flash_new_item(tag, existing_uuid=None):
 # --- Background NFC Hardware Loop ---
 def nfc_worker():
     clf = None
-    # Common connection paths for Raspberry Pi
-    # tty:serial0 -> Standard UART pinout on Raspberry Pi
-    # usb -> Standard USB connection
     connection_paths = ['tty:serial0', 'usb']
     
     for path in connection_paths:
@@ -202,16 +220,8 @@ def nfc_worker():
             clf.close()
 
 if __name__ == "__main__":
-    # Setup the Tkinter Root
     root = tk.Tk()
-    
-    # Initialize Global GUI controller
     gui = AppGUI(root)
-    
-    # Start NFC scanning in a background daemon thread 
-    # (Daemon ensures the thread dies when you close the GUI window)
     worker_thread = threading.Thread(target=nfc_worker, daemon=True)
     worker_thread.start()
-    
-    # Start the Tkinter main loop
     root.mainloop()
