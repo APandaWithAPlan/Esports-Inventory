@@ -20,7 +20,7 @@ class AppGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("NFC Inventory Management System")
-        self.root.geometry("650x450")
+        self.root.geometry("1920x1080")
         
         self.text_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled', font=("Consolas", 10))
         self.text_area.pack(expand=True, fill='both', padx=10, pady=10)
@@ -88,7 +88,7 @@ def handle_existing_item(item):
         
         choice = gui.ask_yes_no("Return Item", f"Item '{item['name']}' is rented by {renter['name']}.\n\nDo you want to process a Return (Check-in)?")
         if choice:
-            condition = gui.ask_string("Item Condition", f"Enter condition of '{item['name']}' on return\n(e.g., Good, Scratched, Damaged):")
+            condition = gui.ask_string("Item Condition", f"Would you like to update the condition of '{item['name']}' on return?\n(e.g., Good, Scratched, Damaged):")
             if condition is None: 
                 condition = "Not specified"
 
@@ -102,11 +102,17 @@ def handle_existing_item(item):
             new_list = [i for i in renter['currently_renting'] if i != item['id']]
             supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
             
-            supabase.table("Inventory").update({
-                "is_rented": False,
-                "condition": condition,
-                "rental_history": history
-            }).eq("id", item['id']).execute()
+            if condition != "":
+                supabase.table("Inventory").update({
+                    "is_rented": False,
+                    "condition": condition,
+                    "rental_history": history
+                }).eq("id", item['id']).execute()
+            else:
+                supabase.table("Inventory").update({
+                    "is_rented": False,
+                    "rental_history": history
+                }).eq("id", item['id']).execute()
             
             gui.log(f"Item '{item['name']}' returned. Condition logged as: {condition}.")
             
