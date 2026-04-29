@@ -445,8 +445,14 @@ def nfc_worker():
             clf.close()
 
 if __name__ == "__main__":
+    print("[DEBUG] Initializing Supabase and variables...")
+    print("[DEBUG] Starting Tkinter root...")
     root = tk.Tk()
     gui = AppGUI(root)
+    
+    print("[DEBUG] Starting NFC daemon thread...")
     worker_thread = threading.Thread(target=nfc_worker, daemon=True)
     worker_thread.start()
+    
+    print("[DEBUG] Entering Tkinter mainloop...")
     root.mainloop()
