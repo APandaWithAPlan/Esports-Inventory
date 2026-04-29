@@ -23,6 +23,7 @@ class AppGUI:
         self.root.geometry("1024x768") 
         
         self.is_authenticated = False
+        self.current_admin_name = None # Store the currently logged-in admin
         self.cart = [] # Store items to be rented together
 
         # --- Theme Definitions ---
@@ -142,10 +143,13 @@ class AppGUI:
 
     def _login_success(self, admin_data):
         self.is_authenticated = True
+        
+        # Store admin name to be used in rental history tracking
+        self.current_admin_name = admin_data.get('name', admin_data.get('id'))
+        
         self.login_win.destroy()
         self.root.deiconify()
-        name = admin_data.get('name', admin_data.get('id'))
-        self.log(f"[!] Authentication Success. Welcome, Admin: {name}")
+        self.log(f"[!] Authentication Success. Welcome, Admin: {self.current_admin_name}")
 
     # --- Theme Engine ---
     def apply_theme(self):
@@ -275,7 +279,9 @@ class AppGUI:
         for item in self.cart:
             if item['id'] in new_item_ids:
                 history = item.get('rental_history') or []
-                history.append(f"{user['name']}/{current_time}/PENDING")
+                
+                # Appending Admin who processed the checkout
+                history.append(f"{user['name']}/{current_time}/PENDING (Issued by: {self.current_admin_name})")
                 
                 supabase.table("Inventory").update({
                     "is_rented": True,
@@ -324,7 +330,8 @@ def handle_existing_item(item):
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
             history = item.get('rental_history') or []
             if history:
-                history[-1] = history[-1].replace("PENDING", current_time)
+                # Modifying 'PENDING' state to note both the return time and the admin who processed the check-in
+                history[-1] = history[-1].replace("PENDING", f"Returned: {current_time} (Received by: {gui.current_admin_name})")
 
             new_list = [i for i in renter['currently_renting'] if i != item['id']]
             supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
