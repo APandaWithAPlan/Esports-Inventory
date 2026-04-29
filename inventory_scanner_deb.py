@@ -23,8 +23,9 @@ class AppGUI:
         self.root.geometry("1024x768") 
         
         self.is_authenticated = False
-        self.current_admin_name = None # Store the currently logged-in admin
-        self.cart = [] # Store items to be rented together
+        self.is_authenticating = False # Lock to prevent login thread flooding
+        self.current_admin_name = None 
+        self.cart = [] 
 
         # --- Theme Definitions ---
         self.themes = {
@@ -58,7 +59,6 @@ class AppGUI:
         self.current_theme = "dark"
 
         # --- Layout Setup ---
-        # Top Frame: Admin Tools & Theming
         self.top_frame = tk.Frame(root)
         self.top_frame.pack(side=tk.TOP, fill='x', padx=10, pady=(10, 0))
         
@@ -68,7 +68,6 @@ class AppGUI:
         self.view_btn = tk.Button(self.top_frame, text="View All Rented Items", command=self.view_rented_items, font=("Consolas", 10, "bold"))
         self.view_btn.pack(side=tk.LEFT)
 
-        # Left side: Logs
         self.left_frame = tk.Frame(root, bd=5)
         self.left_frame.pack(side=tk.LEFT, expand=True, fill='both', padx=(10, 5), pady=10)
         
@@ -78,7 +77,6 @@ class AppGUI:
         self.text_area = scrolledtext.ScrolledText(self.left_frame, wrap=tk.WORD, state='disabled', font=("Consolas", 11))
         self.text_area.pack(expand=True, fill='both', padx=5, pady=5)
 
-        # Right side: Cart UI
         self.right_frame = tk.Frame(root, bd=5, width=450)
         self.right_frame.pack_propagate(False) 
         self.right_frame.pack(side=tk.RIGHT, fill='both', padx=(5, 10), pady=10)
@@ -95,13 +93,9 @@ class AppGUI:
         self.clear_btn = tk.Button(self.right_frame, text="Clear Cart", command=self.clear_cart, font=("Consolas", 14, "bold"), height=2)
         self.clear_btn.pack(fill='x', padx=10, pady=(0, 10))
 
-        # Event flags
-        self.event = threading.Event()
-        self.result = None
-
         # Apply initial theme & show login window
         self.apply_theme()
-        self.root.withdraw() # Hide main app until authenticated
+        self.root.withdraw() 
         self.show_login_window()
 
     # --- Authentication & Startup Flow ---
@@ -129,6 +123,7 @@ class AppGUI:
         if admin_id:
             if len(admin_id) > 9:
                 admin_id = admin_id[1:9]
+            self.is_authenticating = True
             threading.Thread(target=self._verify_admin_thread, args=(admin_id,), daemon=True).start()
 
     def _verify_admin_thread(self, admin_id):
@@ -137,35 +132,37 @@ class AppGUI:
             if res.data:
                 self.root.after(0, self._login_success, res.data[0])
             else:
-                self.root.after(0, messagebox.showerror, "Login Failed", "Access Denied: Invalid Admin ID or Card")
+                self.root.after(0, self._login_fail)
         except Exception as e:
-            self.root.after(0, messagebox.showerror, "Error", f"Database connection error: {e}")
+            self.root.after(0, self._login_error, e)
 
     def _login_success(self, admin_data):
         self.is_authenticated = True
-        
-        # Store admin name to be used in rental history tracking
+        self.is_authenticating = False
         self.current_admin_name = admin_data.get('name', admin_data.get('id'))
-        
         self.login_win.destroy()
         self.root.deiconify()
         self.log(f"[!] Authentication Success. Welcome, Admin: {self.current_admin_name}")
 
+    def _login_fail(self):
+        self.is_authenticating = False
+        messagebox.showerror("Login Failed", "Access Denied: Invalid Admin ID or Card", parent=self.login_win)
+
+    def _login_error(self, e):
+        self.is_authenticating = False
+        messagebox.showerror("Error", f"Database connection error: {e}", parent=self.login_win)
+
     # --- Theme Engine ---
     def apply_theme(self):
         t = self.themes[self.current_theme]
-        
         self.root.configure(bg=t["bg"])
         self.top_frame.configure(bg=t["bg"])
-        
         self.left_frame.configure(bg=t["left_bg"])
         self.log_label.configure(bg=t["left_bg"], fg=t["text"])
         self.text_area.configure(bg=t["console_bg"], fg=t["console_fg"])
-        
         self.right_frame.configure(bg=t["right_bg"])
         self.cart_label.configure(bg=t["right_bg"], fg=t["text"])
         self.cart_listbox.configure(bg=t["cart_bg"], fg=t["cart_fg"])
-        
         self.checkout_btn.configure(bg=t["btn_checkout"], fg="white")
         self.clear_btn.configure(bg=t["btn_clear"], fg="white")
         self.theme_btn.configure(bg=t["btn_tools"], fg="white")
@@ -209,24 +206,30 @@ class AppGUI:
         self.text_area.configure(state='disabled')
 
     def ask_string(self, title, prompt):
-        self.event.clear()
-        self.root.after(0, self._ask_string_gui, title, prompt)
-        self.event.wait()
-        return self.result
+        local_event = threading.Event()
+        result_box = []
 
-    def _ask_string_gui(self, title, prompt):
-        self.result = simpledialog.askstring(title, prompt, parent=self.root)
-        self.event.set()
+        def _ask():
+            res = simpledialog.askstring(title, prompt, parent=self.root)
+            result_box.append(res)
+            local_event.set()
+
+        self.root.after(0, _ask)
+        local_event.wait()
+        return result_box[0] if result_box else None
 
     def ask_yes_no(self, title, prompt):
-        self.event.clear()
-        self.root.after(0, self._ask_yes_no_gui, title, prompt)
-        self.event.wait()
-        return self.result
+        local_event = threading.Event()
+        result_box = []
 
-    def _ask_yes_no_gui(self, title, prompt):
-        self.result = messagebox.askyesno(title, prompt, parent=self.root)
-        self.event.set()
+        def _ask():
+            res = messagebox.askyesno(title, prompt, parent=self.root)
+            result_box.append(res)
+            local_event.set()
+
+        self.root.after(0, _ask)
+        local_event.wait()
+        return result_box[0] if result_box else False
 
     # --- Cart Operations ---
     def add_to_cart(self, item):
@@ -279,8 +282,6 @@ class AppGUI:
         for item in self.cart:
             if item['id'] in new_item_ids:
                 history = item.get('rental_history') or []
-                
-                # Appending Admin who processed the checkout
                 history.append(f"{user['name']}/{current_time}/PENDING (Issued by: {self.current_admin_name})")
                 
                 supabase.table("Inventory").update({
@@ -330,7 +331,6 @@ def handle_existing_item(item):
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
             history = item.get('rental_history') or []
             if history:
-                # Modifying 'PENDING' state to note both the return time and the admin who processed the check-in
                 history[-1] = history[-1].replace("PENDING", f"Returned: {current_time} (Received by: {gui.current_admin_name})")
 
             new_list = [i for i in renter['currently_renting'] if i != item['id']]
@@ -360,7 +360,6 @@ def extract_tag_id(tag):
         for record in tag.ndef.records:
             if isinstance(record, ndef.TextRecord):
                 return record.text
-    # Fallback to hardware tag UID if it lacks an NDEF record
     return tag.identifier.hex()
 
 def process_tag(tag, tag_uuid):
@@ -413,19 +412,32 @@ def nfc_worker():
         gui.log("Hardware Error: Could not connect to NFC reader.")
         return
 
+    last_tag_id = None
+    last_scan_time = 0
+
     try:
         while True:
             tag = clf.connect(rdwr={'on-connect': lambda tag: False})
             if tag:
                 tag_id = extract_tag_id(tag)
+                current_time = time.time()
                 
-                # Check authentication state before processing inventory
+                # DEBOUNCE: Ignore the same tag if scanned within 3 seconds
+                if tag_id == last_tag_id and (current_time - last_scan_time) < 3.0:
+                    time.sleep(0.5)
+                    continue
+                
+                last_tag_id = tag_id
+                last_scan_time = current_time
+                
                 if not gui.is_authenticated:
-                    threading.Thread(target=gui._verify_admin_thread, args=(tag_id,), daemon=True).start()
+                    if not getattr(gui, 'is_authenticating', False):
+                        gui.is_authenticating = True
+                        threading.Thread(target=gui._verify_admin_thread, args=(tag_id,), daemon=True).start()
                 else:
                     process_tag(tag, tag_id)
                     gui.log("\nReady for next tag...")
-            time.sleep(1)
+            time.sleep(0.5)
     except Exception as e:
         gui.log(f"\nClosing or Error: {e}")
     finally:
