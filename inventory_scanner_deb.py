@@ -24,6 +24,7 @@ class AppGUI:
 
         self.cart = [] # Store items to be rented together
         self.is_dark_mode = True # Default to Dark Mode
+        self.current_admin = None # Track logged-in admin
 
         # --- Theme Definitions ---
         self.themes = {
@@ -31,33 +32,37 @@ class AppGUI:
                 "main_bg": "#0f172a",
                 "left_bg": "#1e3a8a",
                 "left_fg": "white",
-                "text_bg": "#020617",     # Darker inset for logs
-                "text_fg": "#e2e8f0",     # Light text for logs
+                "text_bg": "#020617",     
+                "text_fg": "#e2e8f0",     
                 "right_bg": "#7f1d1d",
                 "right_fg": "white",
-                "list_bg": "#450a0a",     # Darker inset for cart
-                "list_fg": "#fecaca",     # Light text for cart
-                "list_sel": "#991b1b",    # Dark red selection
+                "list_bg": "#450a0a",     
+                "list_fg": "#fecaca",     
+                "list_sel": "#991b1b",    
                 "btn_checkout_bg": "#1d4ed8",
                 "btn_clear_bg": "#b91c1c",
                 "btn_toggle_bg": "#334155",
-                "btn_toggle_fg": "white"
+                "btn_toggle_fg": "white",
+                "admin_logged_in": "#34d399", # Green for logged in
+                "admin_logged_out": "#f87171" # Red for logged out
             },
             "light": {
                 "main_bg": "#f8fafc",
                 "left_bg": "#dbeafe",
                 "left_fg": "#1e3a8a",
-                "text_bg": "#ffffff",     # White inset for logs
-                "text_fg": "#0f172a",     # Dark text for logs
+                "text_bg": "#ffffff",     
+                "text_fg": "#0f172a",     
                 "right_bg": "#fee2e2",
                 "right_fg": "#7f1d1d",
-                "list_bg": "#ffffff",     # White inset for cart
-                "list_fg": "#0f172a",     # Dark text for cart
-                "list_sel": "#fca5a5",    # Light red selection
+                "list_bg": "#ffffff",     
+                "list_fg": "#0f172a",     
+                "list_sel": "#fca5a5",    
                 "btn_checkout_bg": "#3b82f6",
                 "btn_clear_bg": "#ef4444",
                 "btn_toggle_bg": "#cbd5e1",
-                "btn_toggle_fg": "#0f172a"
+                "btn_toggle_fg": "#0f172a",
+                "admin_logged_in": "#059669", # Darker green for light mode
+                "admin_logged_out": "#dc2626" # Darker red for light mode
             }
         }
 
@@ -80,6 +85,13 @@ class AppGUI:
         # Theme Toggle Button
         self.toggle_btn = tk.Button(self.right_frame, text="☀️ Light Mode", command=self.toggle_theme, font=("Consolas", 12, "bold"))
         self.toggle_btn.pack(fill='x', padx=10, pady=(5, 0))
+
+        # Admin UI
+        self.admin_label = tk.Label(self.right_frame, text="Admin: Not Logged In", font=("Consolas", 14, "bold"))
+        self.admin_label.pack(pady=(15, 5))
+
+        self.login_btn = tk.Button(self.right_frame, text="Admin Login", command=self.prompt_login_thread, font=("Consolas", 14, "bold"), height=2)
+        self.login_btn.pack(fill='x', padx=10, pady=(0, 15))
 
         self.cart_label = tk.Label(self.right_frame, text="Rental Cart", font=("Consolas", 18, "bold"))
         self.cart_label.pack(pady=(10, 5))
@@ -124,6 +136,18 @@ class AppGUI:
         toggle_text = "☀️ Light Mode" if self.is_dark_mode else "🌙 Dark Mode"
         self.toggle_btn.configure(text=toggle_text, bg=theme["btn_toggle_bg"], fg=theme["btn_toggle_fg"])
 
+        self.admin_label.configure(bg=theme["right_bg"])
+        self._update_admin_ui_colors()
+
+    def _update_admin_ui_colors(self):
+        theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
+        if self.current_admin:
+            self.admin_label.configure(text=f"Admin: {self.current_admin['name']}", fg=theme["admin_logged_in"])
+            self.login_btn.configure(text="Admin Logout", bg=theme["btn_clear_bg"], fg="white")
+        else:
+            self.admin_label.configure(text="Admin: Not Logged In", fg=theme["admin_logged_out"])
+            self.login_btn.configure(text="Admin Login", bg=theme["btn_checkout_bg"], fg="white")
+
     def log(self, msg):
         self.root.after(0, self._log_gui, msg)
 
@@ -153,6 +177,37 @@ class AppGUI:
         self.result = messagebox.askyesno(title, prompt, parent=self.root)
         self.event.set()
 
+    # --- Admin Authentication ---
+    def prompt_login_thread(self):
+        threading.Thread(target=self._process_login, daemon=True).start()
+
+    def _process_login(self):
+        if self.current_admin:
+            self.current_admin = None
+            self.root.after(0, self._update_admin_ui_colors)
+            self.log("\n[-] Admin logged out. System Locked.")
+            return
+
+        self.log("\n[WAIT] Waiting for Admin ID scan...")
+        a_id = self.ask_string("Admin Login", "Please scan or enter Admin ID:")
+        
+        if not a_id:
+            self.log("Login cancelled.")
+            return
+
+        # Strip standard hardware leading chars if present (similar to user logic)
+        if len(a_id) > 9:
+            a_id = a_id[1:9]
+
+        res = supabase.table("Admins").select("*").eq("id", a_id).execute()
+        if res.data:
+            self.current_admin = res.data[0]
+            self.root.after(0, self._update_admin_ui_colors)
+            self.log(f"\n[+] Admin '{self.current_admin['name']}' logged in successfully. System Unlocked.")
+        else:
+            self.log("\n[!] Login failed: Admin ID not found in database.")
+            self.root.after(0, lambda: messagebox.showerror("Login Error", "Admin ID not found."))
+
     # --- Cart Operations ---
     def add_to_cart(self, item):
         if any(cart_item['id'] == item['id'] for cart_item in self.cart):
@@ -168,6 +223,9 @@ class AppGUI:
         self.log("[-] Cart cleared.")
 
     def checkout_cart_thread(self):
+        if not self.current_admin:
+            messagebox.showwarning("Locked", "You must be logged in as an Admin to check out items.")
+            return
         if not self.cart:
             messagebox.showwarning("Empty Cart", "The cart is empty! Scan items first.")
             return
@@ -202,12 +260,14 @@ class AppGUI:
         current_items.extend(new_item_ids)
         supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
 
-        # 2. Update each Inventory item
+        # 2. Update each Inventory item (Now logs admin name who issued it)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        admin_name = self.current_admin['name']
+
         for item in self.cart:
             if item['id'] in new_item_ids:
                 history = item.get('rental_history') or []
-                history.append(f"{user['name']}/{current_time}/PENDING")
+                history.append(f"{user['name']}/{current_time}/PENDING/Out:{admin_name}")
                 
                 supabase.table("Inventory").update({
                     "is_rented": True,
@@ -255,9 +315,12 @@ def handle_existing_item(item):
                 condition = "Not specified"
 
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+            admin_name = gui.current_admin['name']
+
+            # Update history to replace PENDING with check-in time AND receiving Admin
             history = item.get('rental_history') or []
             if history:
-                history[-1] = history[-1].replace("PENDING", current_time)
+                history[-1] = history[-1].replace("PENDING", f"{current_time}/In:{admin_name}")
 
             new_list = [i for i in renter['currently_renting'] if i != item['id']]
             supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
@@ -270,7 +333,7 @@ def handle_existing_item(item):
                 update_payload["condition"] = condition
 
             supabase.table("Inventory").update(update_payload).eq("id", item['id']).execute()
-            gui.log(f"Item '{item['name']}' returned. Condition logged as: {condition}.")
+            gui.log(f"Item '{item['name']}' returned to Admin {admin_name}. Condition: {condition}.")
             
     else:
         current_condition = item.get('condition', 'Not specified')
@@ -283,6 +346,10 @@ def handle_existing_item(item):
             gui.root.after(0, gui.add_to_cart, item)
 
 def process_tag(tag):
+    if not gui.current_admin:
+        gui.log("\n[!] System locked. Please log in as an Admin to process items.")
+        return
+
     tag_uuid = None
     if tag.ndef and len(tag.ndef.records) > 0:
         for record in tag.ndef.records:
@@ -341,7 +408,7 @@ def nfc_worker():
         return
 
     try:
-        gui.log("\nInventory System Live. Scan NTAG215 to begin.")
+        gui.log("\nInventory System Live. Please log in as Admin to scan items.")
         while True:
             tag = clf.connect(rdwr={'on-connect': lambda tag: False})
             if tag:
