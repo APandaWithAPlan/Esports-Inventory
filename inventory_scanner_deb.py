@@ -31,13 +31,13 @@ class AppGUI:
                 "main_bg": "#0f172a",
                 "left_bg": "#1e3a8a",
                 "left_fg": "white",
-                "text_bg": "#eff6ff",
-                "text_fg": "#0f172a",
+                "text_bg": "#020617",     # Darker inset for logs
+                "text_fg": "#e2e8f0",     # Light text for logs
                 "right_bg": "#7f1d1d",
                 "right_fg": "white",
-                "list_bg": "#fef2f2",
-                "list_fg": "#7f1d1d",
-                "list_sel": "#f87171",
+                "list_bg": "#450a0a",     # Darker inset for cart
+                "list_fg": "#fecaca",     # Light text for cart
+                "list_sel": "#991b1b",    # Dark red selection
                 "btn_checkout_bg": "#1d4ed8",
                 "btn_clear_bg": "#b91c1c",
                 "btn_toggle_bg": "#334155",
@@ -47,13 +47,13 @@ class AppGUI:
                 "main_bg": "#f8fafc",
                 "left_bg": "#dbeafe",
                 "left_fg": "#1e3a8a",
-                "text_bg": "#ffffff",
-                "text_fg": "#0f172a",
+                "text_bg": "#ffffff",     # White inset for logs
+                "text_fg": "#0f172a",     # Dark text for logs
                 "right_bg": "#fee2e2",
                 "right_fg": "#7f1d1d",
-                "list_bg": "#ffffff",
-                "list_fg": "#0f172a",
-                "list_sel": "#fca5a5",
+                "list_bg": "#ffffff",     # White inset for cart
+                "list_fg": "#0f172a",     # Dark text for cart
+                "list_sel": "#fca5a5",    # Light red selection
                 "btn_checkout_bg": "#3b82f6",
                 "btn_clear_bg": "#ef4444",
                 "btn_toggle_bg": "#cbd5e1",
@@ -112,7 +112,7 @@ class AppGUI:
         
         self.left_frame.configure(bg=theme["left_bg"])
         self.log_label.configure(bg=theme["left_bg"], fg=theme["left_fg"])
-        self.text_area.configure(bg=theme["text_bg"], fg=theme["text_fg"])
+        self.text_area.configure(bg=theme["text_bg"], fg=theme["text_fg"], insertbackground=theme["text_fg"])
         
         self.right_frame.configure(bg=theme["right_bg"])
         self.cart_label.configure(bg=theme["right_bg"], fg=theme["right_fg"])
