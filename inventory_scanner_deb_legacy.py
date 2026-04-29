@@ -20,32 +20,40 @@ class AppGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("NFC Inventory Management System")
-        self.root.geometry("1024x768") # Adjusted for standard screens, change back to 1920x1080 if needed
+        self.root.geometry("1024x768") 
         
+        # Base background - Dark Blue
+        self.root.configure(bg="#0f172a")
+
         self.cart = [] # Store items to be rented together
 
         # --- Layout Setup ---
-        # Left side: Logs
-        self.left_frame = tk.Frame(root)
-        self.left_frame.pack(side=tk.LEFT, expand=True, fill='both', padx=10, pady=10)
+        # Left side: Logs (Blue Theme)
+        self.left_frame = tk.Frame(root, bg="#1e3a8a", bd=5)
+        self.left_frame.pack(side=tk.LEFT, expand=True, fill='both', padx=(10, 5), pady=10)
         
-        self.text_area = scrolledtext.ScrolledText(self.left_frame, wrap=tk.WORD, state='disabled', font=("Consolas", 10))
-        self.text_area.pack(expand=True, fill='both')
+        tk.Label(self.left_frame, text="System Logs", font=("Consolas", 14, "bold"), bg="#1e3a8a", fg="white").pack(pady=(5, 5))
+        
+        self.text_area = scrolledtext.ScrolledText(self.left_frame, wrap=tk.WORD, state='disabled', font=("Consolas", 11), bg="#eff6ff", fg="#0f172a")
+        self.text_area.pack(expand=True, fill='both', padx=5, pady=5)
 
-        # Right side: Cart UI
-        self.right_frame = tk.Frame(root, width=300)
-        self.right_frame.pack(side=tk.RIGHT, fill='y', padx=10, pady=10)
+        # Right side: Cart UI (Red Theme, Increased Space)
+        self.right_frame = tk.Frame(root, bg="#7f1d1d", bd=5, width=450) # Wider cart area
+        self.right_frame.pack_propagate(False) # Forces the frame to keep its width
+        self.right_frame.pack(side=tk.RIGHT, fill='both', padx=(5, 10), pady=10)
         
-        tk.Label(self.right_frame, text="Rental Cart", font=("Consolas", 14, "bold")).pack(pady=(0, 10))
+        tk.Label(self.right_frame, text="Rental Cart", font=("Consolas", 18, "bold"), bg="#7f1d1d", fg="white").pack(pady=(10, 5))
         
-        self.cart_listbox = tk.Listbox(self.right_frame, font=("Consolas", 12), width=25)
-        self.cart_listbox.pack(expand=True, fill='y', pady=5)
+        self.cart_listbox = tk.Listbox(self.right_frame, font=("Consolas", 14), bg="#fef2f2", fg="#7f1d1d", selectbackground="#f87171")
+        # fill='both' allows it to take up the newly allocated space
+        self.cart_listbox.pack(expand=True, fill='both', padx=10, pady=10) 
         
-        self.checkout_btn = tk.Button(self.right_frame, text="Checkout Cart", command=self.checkout_cart_thread, bg="#28a745", fg="white", font=("Consolas", 12, "bold"))
-        self.checkout_btn.pack(fill='x', pady=5)
+        # Buttons with corresponding colors
+        self.checkout_btn = tk.Button(self.right_frame, text="Checkout Cart", command=self.checkout_cart_thread, bg="#1d4ed8", fg="white", font=("Consolas", 14, "bold"), height=2)
+        self.checkout_btn.pack(fill='x', padx=10, pady=(0, 5))
 
-        self.clear_btn = tk.Button(self.right_frame, text="Clear Cart", command=self.clear_cart, bg="#dc3545", fg="white", font=("Consolas", 12, "bold"))
-        self.clear_btn.pack(fill='x', pady=5)
+        self.clear_btn = tk.Button(self.right_frame, text="Clear Cart", command=self.clear_cart, bg="#b91c1c", fg="white", font=("Consolas", 14, "bold"), height=2)
+        self.clear_btn.pack(fill='x', padx=10, pady=(0, 10))
 
         # Event flags to pause the background thread while waiting for UI input
         self.event = threading.Event()
