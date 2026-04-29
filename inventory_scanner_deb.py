@@ -41,10 +41,11 @@ class AppGUI:
                 "list_sel": "#991b1b",    
                 "btn_checkout_bg": "#1d4ed8",
                 "btn_clear_bg": "#b91c1c",
+                "btn_view_bg": "#d97706", # Amber for View button
                 "btn_toggle_bg": "#334155",
                 "btn_toggle_fg": "white",
-                "admin_logged_in": "#34d399", # Green for logged in
-                "admin_logged_out": "#f87171" # Red for logged out
+                "admin_logged_in": "#34d399", 
+                "admin_logged_out": "#f87171" 
             },
             "light": {
                 "main_bg": "#f8fafc",
@@ -59,10 +60,11 @@ class AppGUI:
                 "list_sel": "#fca5a5",    
                 "btn_checkout_bg": "#3b82f6",
                 "btn_clear_bg": "#ef4444",
+                "btn_view_bg": "#f59e0b", # Amber for View button
                 "btn_toggle_bg": "#cbd5e1",
                 "btn_toggle_fg": "#0f172a",
-                "admin_logged_in": "#059669", # Darker green for light mode
-                "admin_logged_out": "#dc2626" # Darker red for light mode
+                "admin_logged_in": "#059669", 
+                "admin_logged_out": "#dc2626" 
             }
         }
 
@@ -104,7 +106,10 @@ class AppGUI:
         self.checkout_btn.pack(fill='x', padx=10, pady=(0, 5))
 
         self.clear_btn = tk.Button(self.right_frame, text="Clear Cart", command=self.clear_cart, font=("Consolas", 14, "bold"), height=2)
-        self.clear_btn.pack(fill='x', padx=10, pady=(0, 10))
+        self.clear_btn.pack(fill='x', padx=10, pady=(0, 5))
+
+        self.view_rented_btn = tk.Button(self.right_frame, text="View Rented Items", command=self.view_rented_items_thread, font=("Consolas", 14, "bold"), height=2)
+        self.view_rented_btn.pack(fill='x', padx=10, pady=(0, 10))
 
         # Apply the initial theme colors
         self.apply_theme()
@@ -132,6 +137,7 @@ class AppGUI:
         
         self.checkout_btn.configure(bg=theme["btn_checkout_bg"], fg="white")
         self.clear_btn.configure(bg=theme["btn_clear_bg"], fg="white")
+        self.view_rented_btn.configure(bg=theme["btn_view_bg"], fg="white")
         
         toggle_text = "☀️ Light Mode" if self.is_dark_mode else "🌙 Dark Mode"
         self.toggle_btn.configure(text=toggle_text, bg=theme["btn_toggle_bg"], fg=theme["btn_toggle_fg"])
@@ -195,7 +201,6 @@ class AppGUI:
             self.log("Login cancelled.")
             return
 
-        # Strip standard hardware leading chars if present (similar to user logic)
         if len(a_id) > 9:
             a_id = a_id[1:9]
 
@@ -207,6 +212,31 @@ class AppGUI:
         else:
             self.log("\n[!] Login failed: Admin ID not found in database.")
             self.root.after(0, lambda: messagebox.showerror("Login Error", "Admin ID not found."))
+
+    # --- Database View Operations ---
+    def view_rented_items_thread(self):
+        if not self.current_admin:
+            messagebox.showwarning("Locked", "You must be logged in as an Admin to view database records.")
+            return
+        threading.Thread(target=self._process_view_rented, daemon=True).start()
+
+    def _process_view_rented(self):
+        self.log("\n[WAIT] Fetching currently rented items from database...")
+        try:
+            res = supabase.table("Inventory").select("name, last_rented_person").eq("is_rented", True).execute()
+            rented_items = res.data
+
+            if not rented_items:
+                self.log("\n[-] No items are currently rented out.")
+            else:
+                self.log(f"\n--- Currently Rented Items ({len(rented_items)}) ---")
+                for item in rented_items:
+                    item_name = item.get("name", "Unknown Item")
+                    renter = item.get("last_rented_person", "Unknown Renter")
+                    self.log(f" • {item_name}  -->  {renter}")
+                self.log("----------------------------------")
+        except Exception as e:
+            self.log(f"\n[!] Error fetching records: {e}")
 
     # --- Cart Operations ---
     def add_to_cart(self, item):
@@ -229,7 +259,6 @@ class AppGUI:
         if not self.cart:
             messagebox.showwarning("Empty Cart", "The cart is empty! Scan items first.")
             return
-        # Run checkout in background to not freeze UI during DB operations
         threading.Thread(target=self._process_checkout, daemon=True).start()
 
     def _process_checkout(self):
@@ -256,11 +285,9 @@ class AppGUI:
             self.root.after(0, self.clear_cart)
             return
 
-        # 1. Update User's currently_renting list once
         current_items.extend(new_item_ids)
         supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
 
-        # 2. Update each Inventory item (Now logs admin name who issued it)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
         admin_name = self.current_admin['name']
 
@@ -307,7 +334,6 @@ def handle_existing_item(item):
     if renter:
         gui.log(f"STATUS: [ RENTED ] to {renter['name']}")
         
-        # Returns are still handled individually immediately upon scanning
         choice = gui.ask_yes_no("Return Item", f"Item '{item['name']}' is rented by {renter['name']}.\n\nProcess a Return (Check-in)?")
         if choice:
             condition = gui.ask_string("Item Condition", f"Update condition of '{item['name']}' on return?\n(e.g., Good, Scratched, Damaged):")
@@ -317,7 +343,6 @@ def handle_existing_item(item):
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
             admin_name = gui.current_admin['name']
 
-            # Update history to replace PENDING with check-in time AND receiving Admin
             history = item.get('rental_history') or []
             if history:
                 history[-1] = history[-1].replace("PENDING", f"{current_time}/In:{admin_name}")
@@ -340,7 +365,6 @@ def handle_existing_item(item):
         gui.log(f"STATUS: [ AVAILABLE ] (Last Renter: {item.get('last_rented_person', 'None')})")
         gui.log(f"CONDITION: {current_condition}")
         
-        # Instead of asking for a User immediately, we add to Cart
         choice = gui.ask_yes_no("Add to Cart", f"Item '{item['name']}' is available.\n\nAdd to checkout cart?")
         if choice:
             gui.root.after(0, gui.add_to_cart, item)
