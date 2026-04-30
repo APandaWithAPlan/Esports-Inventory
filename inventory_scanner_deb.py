@@ -34,37 +34,37 @@ class AppGUI:
         # --- Esports/Arena Theme Definitions ---
         self.themes = {
             "dark": {
-                "main_bg": "#090C10",          # Deep void background
-                "panel_bg": "#161B22",         # Elevated panel color
-                "header_fg": "#58A6FF",        # Neon blue headers
-                "text_bg": "#010409",          # Pitch black terminal
-                "text_fg": "#00FF9D",          # Hacker/Neon green logs
-                "right_header_fg": "#FF7B72",  # Cyber pink/red headers
-                "list_bg": "#0D1117",          # Dark list background
-                "list_fg": "#C9D1D9",          # Off-white text
-                "list_sel": "#1F6FEB",         # Bright blue selection highlight
-                "btn_checkout_bg": "#238636",  # Success emerald
-                "btn_clear_bg": "#DA3633",     # Danger red
-                "btn_view_bg": "#D29922",      # Warning amber
-                "btn_toggle_bg": "#21262D",    # Subtle gray
+                "main_bg": "#090C10",          
+                "panel_bg": "#161B22",         
+                "header_fg": "#58A6FF",        
+                "text_bg": "#010409",          
+                "text_fg": "#00FF9D",          
+                "right_header_fg": "#FF7B72",  
+                "list_bg": "#0D1117",          
+                "list_fg": "#C9D1D9",          
+                "list_sel": "#1F6FEB",         
+                "btn_checkout_bg": "#238636",  
+                "btn_clear_bg": "#DA3633",     
+                "btn_view_bg": "#D29922",      
+                "btn_toggle_bg": "#21262D",    
                 "btn_toggle_fg": "#C9D1D9",
                 "btn_active_fg": "#FFFFFF",
-                "admin_logged_in": "#3FB950",  # Vivid green
-                "admin_logged_out": "#F85149"  # Vivid red
+                "admin_logged_in": "#3FB950",  
+                "admin_logged_out": "#F85149"  
             },
             "light": {
-                "main_bg": "#F3F4F6",          # Clean off-white
-                "panel_bg": "#FFFFFF",         # Pure white panels
-                "header_fg": "#1D4ED8",        # Deep blue headers
-                "text_bg": "#F8FAFC",          # Very light terminal
-                "text_fg": "#0F172A",          # Dark slate logs
-                "right_header_fg": "#BE123C",  # Deep rose headers
+                "main_bg": "#F3F4F6",          
+                "panel_bg": "#FFFFFF",         
+                "header_fg": "#1D4ED8",        
+                "text_bg": "#F8FAFC",          
+                "text_fg": "#0F172A",          
+                "right_header_fg": "#BE123C",  
                 "list_bg": "#FFFFFF",          
                 "list_fg": "#1E293B",          
-                "list_sel": "#93C5FD",         # Soft blue highlight
-                "btn_checkout_bg": "#2563EB",  # Royal blue
-                "btn_clear_bg": "#E11D48",     # Rose red
-                "btn_view_bg": "#D97706",      # Amber
+                "list_sel": "#93C5FD",         
+                "btn_checkout_bg": "#2563EB",  
+                "btn_clear_bg": "#E11D48",     
+                "btn_view_bg": "#D97706",      
                 "btn_toggle_bg": "#E2E8F0",
                 "btn_toggle_fg": "#0F172A",
                 "btn_active_fg": "#FFFFFF",
@@ -74,12 +74,9 @@ class AppGUI:
         }
 
         # --- Layout Setup ---
-        
-        # Main Header
         self.top_header = tk.Label(root, text="⚡ ARENA INVENTORY CTRL ⚡", font=("Segoe UI", 20, "bold"), pady=10)
         self.top_header.pack(fill='x')
 
-        # Left side: Logs (Flat UI)
         self.left_frame = tk.Frame(root, bd=0, relief="flat")
         self.left_frame.pack(side=tk.LEFT, expand=True, fill='both', padx=(20, 10), pady=(0, 20))
         
@@ -92,19 +89,16 @@ class AppGUI:
         )
         self.text_area.pack(expand=True, fill='both')
 
-        # Right side: Cart UI (Flat UI)
         self.right_frame = tk.Frame(root, bd=0, width=400)
         self.right_frame.pack_propagate(False)
         self.right_frame.pack(side=tk.RIGHT, fill='y', padx=(10, 20), pady=(0, 20))
         
-        # Theme Toggle Button
         self.toggle_btn = tk.Button(
             self.right_frame, text="☀️ LIGHT SYSTEM", command=self.toggle_theme, 
             font=("Segoe UI", 11, "bold"), bd=0, cursor="hand2", pady=8
         )
         self.toggle_btn.pack(fill='x', pady=(15, 20))
 
-        # Admin UI
         self.admin_label = tk.Label(self.right_frame, text="ADMIN: OFFLINE", font=self.header_font)
         self.admin_label.pack(pady=(5, 5))
 
@@ -114,7 +108,6 @@ class AppGUI:
         )
         self.login_btn.pack(fill='x', pady=(0, 25))
 
-        # Cart Section
         self.cart_label = tk.Label(self.right_frame, text="ACTIVE CART", font=self.header_font)
         self.cart_label.pack(pady=(5, 5))
         
@@ -124,7 +117,6 @@ class AppGUI:
         )
         self.cart_listbox.pack(expand=True, fill='both', pady=(0, 15)) 
         
-        # Action Buttons
         self.checkout_btn = tk.Button(
             self.right_frame, text="DEPLOY CART", command=self.checkout_cart_thread, 
             font=self.ui_font, bd=0, cursor="hand2", pady=15
@@ -143,10 +135,8 @@ class AppGUI:
         )
         self.view_rented_btn.pack(fill='x')
 
-        # Apply the initial theme colors
         self.apply_theme()
 
-        # Event flags to pause the background thread while waiting for UI input
         self.event = threading.Event()
         self.result = None
 
@@ -168,12 +158,8 @@ class AppGUI:
         self.cart_label.configure(bg=theme["panel_bg"], fg=theme["right_header_fg"])
         self.cart_listbox.configure(bg=theme["list_bg"], fg=theme["list_fg"], selectbackground=theme["list_sel"])
         
-        # Configure buttons with active backgrounds to prevent ugly flashing
         def style_btn(btn, bg_color):
-            btn.configure(
-                bg=bg_color, fg="white", 
-                activebackground=bg_color, activeforeground=theme["btn_active_fg"]
-            )
+            btn.configure(bg=bg_color, fg="white", activebackground=bg_color, activeforeground=theme["btn_active_fg"])
 
         style_btn(self.checkout_btn, theme["btn_checkout_bg"])
         style_btn(self.clear_btn, theme["btn_clear_bg"])
@@ -225,6 +211,62 @@ class AppGUI:
     def _ask_yes_no_gui(self, title, prompt):
         self.result = messagebox.askyesno(title, prompt, parent=self.root)
         self.event.set()
+
+    # --- NEW: User Profile Modal GUI ---
+    def ask_profile_confirmation(self, user, cart_size):
+        self.event.clear()
+        self.root.after(0, self._show_profile_modal, user, cart_size)
+        self.event.wait()
+        return self.result
+
+    def _show_profile_modal(self, user, cart_size):
+        modal = tk.Toplevel(self.root)
+        modal.title("USER PROFILE REVIEW")
+        modal.geometry("450x380")
+        modal.transient(self.root) 
+        modal.grab_set() 
+
+        theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
+        modal.configure(bg=theme["panel_bg"])
+
+        # Fetch Data
+        renting_count = len(user.get('currently_renting') or [])
+        strikes = user.get('strike_history') or []
+        strike_count = len(strikes)
+        strike_color = theme["admin_logged_out"] if strike_count > 0 else theme["admin_logged_in"]
+
+        tk.Label(modal, text="🛡️ PRE-DEPLOYMENT REVIEW 🛡️", font=("Segoe UI", 16, "bold"), bg=theme["panel_bg"], fg=theme["header_fg"]).pack(pady=(20, 15))
+        
+        tk.Label(modal, text=f"USER ALIAS: {user['name'].upper()}", font=("Segoe UI", 14, "bold"), bg=theme["panel_bg"], fg=theme["list_fg"]).pack(pady=5)
+        tk.Label(modal, text=f"CURRENT ASSETS OUT: {renting_count}", font=("Segoe UI", 12), bg=theme["panel_bg"], fg=theme["list_fg"]).pack(pady=5)
+        tk.Label(modal, text=f"STRIKES ON RECORD: {strike_count}", font=("Segoe UI", 14, "bold"), bg=theme["panel_bg"], fg=strike_color).pack(pady=5)
+
+        # Show the most recent strike if it exists
+        if strike_count > 0:
+            latest_strike = strikes[-1]
+            if len(latest_strike) > 40:
+                latest_strike = latest_strike[:40] + "..."
+            tk.Label(modal, text=f"Latest Strike: {latest_strike}", font=("Consolas", 10, "italic"), bg=theme["panel_bg"], fg=theme["admin_logged_out"]).pack(pady=5)
+
+        tk.Label(modal, text=f"Attempting to deploy {cart_size} new asset(s).", font=("Segoe UI", 11, "italic"), bg=theme["panel_bg"], fg=theme["btn_view_bg"]).pack(pady=(15, 10))
+
+        def proceed():
+            self.result = True
+            modal.destroy()
+            self.event.set()
+
+        def cancel():
+            self.result = False
+            modal.destroy()
+            self.event.set()
+
+        btn_frame = tk.Frame(modal, bg=theme["panel_bg"])
+        btn_frame.pack(fill="x", pady=20, padx=20)
+
+        tk.Button(btn_frame, text="AUTHORIZE DEPLOYMENT", command=proceed, bg=theme["btn_checkout_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=8).pack(side="left", expand=True, fill="x", padx=5)
+        tk.Button(btn_frame, text="DENY & CANCEL", command=cancel, bg=theme["btn_clear_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=8).pack(side="right", expand=True, fill="x", padx=5)
+        
+        modal.protocol("WM_DELETE_WINDOW", cancel)
 
     # --- Admin Authentication ---
     def prompt_login_thread(self):
@@ -287,7 +329,6 @@ class AppGUI:
             self.log(f"[*] {item['name']} already detected in staging.")
             return
         self.cart.append(item)
-        # Add visual padding to list items
         self.cart_listbox.insert(tk.END, f"  {item['name']}")
         self.log(f"[+] Staged '{item['name']}' for deployment.")
 
@@ -320,6 +361,13 @@ class AppGUI:
         if not user:
             self.log("Deployment failed: User matrix error.")
             return
+
+        # --- NEW: Show Profile and Wait for Admin Authorization ---
+        proceed = self.ask_profile_confirmation(user, len(self.cart))
+        if not proceed:
+            self.log(f"Deployment to {user['name']} denied by Admin.")
+            return
+        # --------------------------------------------------------
 
         current_items = user.get('currently_renting') or []
         new_item_ids = [item['id'] for item in self.cart if item['id'] not in current_items]
@@ -363,9 +411,11 @@ def register_user(user_id: str):
     gui.log(f"\n[!] User ID {user_id} unassigned.")
     name = gui.ask_string("Register User", "Enter alias for new user registration:")
     if name:
-        supabase.table("Users").insert({"id": user_id, "name": name, "currently_renting": []}).execute()
+        # Added strike_history array for new users
+        new_user = {"id": user_id, "name": name, "currently_renting": [], "strike_history": []}
+        supabase.table("Users").insert(new_user).execute()
         gui.log(f"User '{name}' added to matrix.")
-        return {"id": user_id, "name": name, "currently_renting": []}
+        return new_user
     return None
 
 def handle_existing_item(item):
@@ -383,6 +433,18 @@ def handle_existing_item(item):
             condition = gui.ask_string("Asset Condition", f"Log condition of '{item['name']}'\n(e.g., Pristine, Scratched, Damaged):")
             if condition is None: 
                 condition = "Unverified"
+
+            # --- NEW: Strike System Application ---
+            issue_strike = gui.ask_yes_no("Disciplinary Action", f"Issue a strike to {renter['name']} for the return of this asset?")
+            if issue_strike:
+                strike_reason = gui.ask_string("Strike Details", "Enter description of the infraction/damage:")
+                if strike_reason:
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    user_strikes = renter.get('strike_history') or []
+                    user_strikes.append(f"[{timestamp}] {strike_reason} (Asset: {item['name']})")
+                    supabase.table("Users").update({"strike_history": user_strikes}).eq("id", renter['id']).execute()
+                    gui.log(f"[!] Strike recorded on {renter['name']}'s profile.")
+            # --------------------------------------
 
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
             admin_name = gui.current_admin['name']
