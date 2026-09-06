@@ -1,4 +1,5 @@
 import os
+import queue
 import uuid
 import nfc
 import ndef
@@ -6,149 +7,172 @@ import time
 import threading
 import requests
 import tkinter as tk
-from tkinter import scrolledtext
-from datetime import datetime
+import customtkinter as ctk
+from datetime import datetime, timezone
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
 load_dotenv()
 url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
+key: str = os.environ.get("SUPABASE_KEY")  # must be the service_role key: this kiosk bypasses RLS by design
 discord_webhook_url: str = os.environ.get("DISCORD_WEBHOOK_URL")
 supabase: Client = create_client(url, key)
 
 # --- Thread-Safe GUI Helper ---
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("dark-blue")
+
+
 class AppGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("LATech Esports Inventory System")
-        self.root.geometry("1080x850") 
-        
-        # Base UI Fonts
-        self.ui_font = ("Segoe UI", 13, "bold")
-        self.header_font = ("Segoe UI", 18, "bold")
-        self.log_font = ("Consolas", 12)
+        self.root.geometry("1080x850")
 
-        self.cart = [] 
-        self.is_dark_mode = True 
-        self.current_admin = None 
+        # Base UI Fonts
+        self.ui_font = ctk.CTkFont("Segoe UI", 13, weight="bold")
+        self.header_font = ctk.CTkFont("Segoe UI", 18, weight="bold")
+        self.log_font = ctk.CTkFont("Consolas", 12)
+
+        self.cart = []
+        self.is_dark_mode = True
+        self.current_admin = None
+        self._cart_rows = []
 
         # --- Esports Theme Definitions ---
         self.themes = {
             "dark": {
-                "main_bg": "#090C10",          
-                "panel_bg": "#161B22",         
-                "header_fg": "#58A6FF",        
-                "text_bg": "#010409",          
-                "text_fg": "#00FF9D",          
-                "right_header_fg": "#FF7B72",  
-                "list_bg": "#0D1117",          
-                "list_fg": "#C9D1D9",          
-                "list_sel": "#1F6FEB",         
-                "btn_checkout_bg": "#238636",  
-                "btn_clear_bg": "#DA3633",     
-                "btn_view_bg": "#D29922",      
-                "btn_closing_bg": "#8B5CF6",   
-                "btn_toggle_bg": "#21262D",    
+                "main_bg": "#090C10",
+                "panel_bg": "#161B22",
+                "header_fg": "#58A6FF",
+                "text_bg": "#010409",
+                "text_fg": "#00FF9D",
+                "right_header_fg": "#FF7B72",
+                "list_bg": "#0D1117",
+                "list_fg": "#C9D1D9",
+                "list_sel": "#1F6FEB",
+                "btn_checkout_bg": "#238636",
+                "btn_clear_bg": "#DA3633",
+                "btn_view_bg": "#D29922",
+                "btn_closing_bg": "#8B5CF6",
+                "btn_toggle_bg": "#21262D",
                 "btn_toggle_fg": "#C9D1D9",
                 "btn_active_fg": "#FFFFFF",
-                "admin_logged_in": "#3FB950",  
-                "admin_logged_out": "#F85149"  
+                "admin_logged_in": "#3FB950",
+                "admin_logged_out": "#F85149"
             },
             "light": {
-                "main_bg": "#F3F4F6",          
-                "panel_bg": "#FFFFFF",         
-                "header_fg": "#1D4ED8",        
-                "text_bg": "#F8FAFC",          
-                "text_fg": "#0F172A",          
-                "right_header_fg": "#BE123C",  
-                "list_bg": "#FFFFFF",          
-                "list_fg": "#1E293B",          
-                "list_sel": "#93C5FD",         
-                "btn_checkout_bg": "#2563EB",  
-                "btn_clear_bg": "#E11D48",     
-                "btn_view_bg": "#D97706",      
-                "btn_closing_bg": "#7C3AED",   
+                "main_bg": "#F3F4F6",
+                "panel_bg": "#FFFFFF",
+                "header_fg": "#1D4ED8",
+                "text_bg": "#F8FAFC",
+                "text_fg": "#0F172A",
+                "right_header_fg": "#BE123C",
+                "list_bg": "#FFFFFF",
+                "list_fg": "#1E293B",
+                "list_sel": "#93C5FD",
+                "btn_checkout_bg": "#2563EB",
+                "btn_clear_bg": "#E11D48",
+                "btn_view_bg": "#D97706",
+                "btn_closing_bg": "#7C3AED",
                 "btn_toggle_bg": "#E2E8F0",
                 "btn_toggle_fg": "#0F172A",
                 "btn_active_fg": "#FFFFFF",
-                "admin_logged_in": "#059669", 
-                "admin_logged_out": "#DC2626" 
+                "admin_logged_in": "#059669",
+                "admin_logged_out": "#DC2626"
             }
         }
 
         # --- Layout Setup ---
-        self.top_header = tk.Label(root, text="⚡ LATECH ESPORTS INVENTORY CTRL ⚡", font=("Segoe UI", 20, "bold"), pady=10)
-        self.top_header.pack(fill='x')
+        self.top_header = ctk.CTkLabel(root, text="⚡ LATECH ESPORTS INVENTORY CTRL ⚡", font=ctk.CTkFont("Segoe UI", 20, weight="bold"), corner_radius=0)
+        self.top_header.pack(fill='x', pady=10)
 
-        self.left_frame = tk.Frame(root, bd=0, relief="flat")
+        self.left_frame = ctk.CTkFrame(root, corner_radius=12, border_width=0)
         self.left_frame.pack(side=tk.LEFT, expand=True, fill='both', padx=(20, 10), pady=(0, 20))
-        
-        self.log_label = tk.Label(self.left_frame, text="TERMINAL LOGS", font=self.header_font, anchor="w")
-        self.log_label.pack(fill='x', pady=(15, 10), padx=5)
-        
-        self.text_area = scrolledtext.ScrolledText(
-            self.left_frame, wrap=tk.WORD, state='disabled', font=self.log_font,
-            bd=0, padx=15, pady=15, relief="flat"
-        )
-        self.text_area.pack(expand=True, fill='both')
 
-        self.right_frame = tk.Frame(root, bd=0, width=400)
+        self.log_label = ctk.CTkLabel(self.left_frame, text="TERMINAL LOGS", font=self.header_font, anchor="w")
+        self.log_label.pack(fill='x', pady=(15, 10), padx=15)
+
+        self.text_area = ctk.CTkTextbox(
+            self.left_frame, wrap=tk.WORD, state='disabled', font=self.log_font,
+            corner_radius=8, border_width=0
+        )
+        self.text_area.pack(expand=True, fill='both', padx=15, pady=(0, 15))
+
+        self.right_frame = ctk.CTkFrame(root, corner_radius=12, border_width=0, width=400)
         self.right_frame.pack_propagate(False)
         self.right_frame.pack(side=tk.RIGHT, fill='y', padx=(10, 20), pady=(0, 20))
-        
-        self.toggle_btn = tk.Button(
-            self.right_frame, text="☀️ LIGHT SYSTEM", command=self.toggle_theme, 
-            font=("Segoe UI", 11, "bold"), bd=0, cursor="hand2", pady=8
-        )
-        self.toggle_btn.pack(fill='x', pady=(15, 20))
 
-        self.admin_label = tk.Label(self.right_frame, text="ADMIN: OFFLINE", font=self.header_font)
+        self.toggle_btn = ctk.CTkButton(
+            self.right_frame, text="☀️ LIGHT SYSTEM", command=self.toggle_theme,
+            font=ctk.CTkFont("Segoe UI", 11, weight="bold"), corner_radius=8, cursor="hand2", height=36
+        )
+        self.toggle_btn.pack(fill='x', padx=15, pady=(15, 20))
+
+        self.admin_label = ctk.CTkLabel(self.right_frame, text="ADMIN: OFFLINE", font=self.header_font)
         self.admin_label.pack(pady=(5, 5))
 
-        self.login_btn = tk.Button(
-            self.right_frame, text="AUTHENTICATE", command=self.prompt_login_thread, 
-            font=self.ui_font, bd=0, cursor="hand2", pady=12
+        self.login_btn = ctk.CTkButton(
+            self.right_frame, text="AUTHENTICATE", command=self.prompt_login_thread,
+            font=self.ui_font, corner_radius=8, cursor="hand2", height=44
         )
-        self.login_btn.pack(fill='x', pady=(0, 25))
+        self.login_btn.pack(fill='x', padx=15, pady=(0, 25))
 
-        self.cart_label = tk.Label(self.right_frame, text="ACTIVE CART", font=self.header_font)
+        self.cart_label = ctk.CTkLabel(self.right_frame, text="ACTIVE CART", font=self.header_font)
         self.cart_label.pack(pady=(5, 5))
-        
-        self.cart_listbox = tk.Listbox(
-            self.right_frame, font=self.log_font, bd=0, relief="flat", 
-            highlightthickness=0, activestyle="none"
-        )
-        self.cart_listbox.pack(expand=True, fill='both', pady=(0, 15)) 
-        
-        self.checkout_btn = tk.Button(
-            self.right_frame, text="DEPLOY CART", command=self.checkout_cart_thread, 
-            font=self.ui_font, bd=0, cursor="hand2", pady=15
-        )
-        self.checkout_btn.pack(fill='x', pady=(0, 10))
 
-        self.clear_btn = tk.Button(
-            self.right_frame, text="PURGE CART", command=self.clear_cart, 
-            font=self.ui_font, bd=0, cursor="hand2", pady=15
+        self.cart_listbox = ctk.CTkScrollableFrame(
+            self.right_frame, corner_radius=8, border_width=0
         )
-        self.clear_btn.pack(fill='x', pady=(0, 10))
+        self.cart_listbox.pack(expand=True, fill='both', padx=15, pady=(0, 15))
 
-        self.view_rented_btn = tk.Button(
-            self.right_frame, text="VIEW DEPLOYED ASSETS", command=self.view_rented_items_thread, 
-            font=self.ui_font, bd=0, cursor="hand2", pady=15
+        self.checkout_btn = ctk.CTkButton(
+            self.right_frame, text="DEPLOY CART", command=self.checkout_cart_thread,
+            font=self.ui_font, corner_radius=8, cursor="hand2", height=48
         )
-        self.view_rented_btn.pack(fill='x', pady=(0, 10))
+        self.checkout_btn.pack(fill='x', padx=15, pady=(0, 10))
 
-        self.closing_btn = tk.Button(
-            self.right_frame, text="NIGHTLOCK PROTOCOL", command=self.closing_protocol_thread, 
-            font=self.ui_font, bd=0, cursor="hand2", pady=15
+        self.clear_btn = ctk.CTkButton(
+            self.right_frame, text="PURGE CART", command=self.clear_cart,
+            font=self.ui_font, corner_radius=8, cursor="hand2", height=48
         )
-        self.closing_btn.pack(fill='x')
+        self.clear_btn.pack(fill='x', padx=15, pady=(0, 10))
+
+        self.view_rented_btn = ctk.CTkButton(
+            self.right_frame, text="VIEW DEPLOYED ASSETS", command=self.view_rented_items_thread,
+            font=self.ui_font, corner_radius=8, cursor="hand2", height=48
+        )
+        self.view_rented_btn.pack(fill='x', padx=15, pady=(0, 10))
+
+        self.closing_btn = ctk.CTkButton(
+            self.right_frame, text="NIGHTLOCK PROTOCOL", command=self.closing_protocol_thread,
+            font=self.ui_font, corner_radius=8, cursor="hand2", height=48
+        )
+        self.closing_btn.pack(fill='x', padx=15, pady=(0, 15))
 
         self.apply_theme()
 
         self.event = threading.Event()
         self.result = None
+
+        # Tk 9.0 on macOS does not reliably wake the run loop when .after() is
+        # scheduled from a non-main thread -- the call silently no-ops. Worker
+        # threads hand off to the GUI exclusively through this queue, which is
+        # only ever drained by a poll loop scheduled from the main thread.
+        self._ui_queue = queue.Queue()
+        self.root.after(50, self._drain_ui_queue)
+
+    def dispatch(self, fn, *args):
+        self._ui_queue.put((fn, args))
+
+    def _drain_ui_queue(self):
+        try:
+            while True:
+                fn, args = self._ui_queue.get_nowait()
+                fn(*args)
+        except queue.Empty:
+            pass
+        self.root.after(50, self._drain_ui_queue)
 
     def toggle_theme(self):
         self.is_dark_mode = not self.is_dark_mode
@@ -156,46 +180,49 @@ class AppGUI:
 
     def apply_theme(self):
         theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
-        
-        self.root.configure(bg=theme["main_bg"])
-        self.top_header.configure(bg=theme["main_bg"], fg=theme["header_fg"])
-        
-        self.left_frame.configure(bg=theme["panel_bg"])
-        self.log_label.configure(bg=theme["panel_bg"], fg=theme["header_fg"])
-        self.text_area.configure(bg=theme["text_bg"], fg=theme["text_fg"], insertbackground=theme["text_fg"])
-        
-        self.right_frame.configure(bg=theme["panel_bg"])
-        self.cart_label.configure(bg=theme["panel_bg"], fg=theme["right_header_fg"])
-        self.cart_listbox.configure(bg=theme["list_bg"], fg=theme["list_fg"], selectbackground=theme["list_sel"])
-        
+        ctk.set_appearance_mode("dark" if self.is_dark_mode else "light")
+
+        self.root.configure(fg_color=theme["main_bg"])
+        self.top_header.configure(fg_color=theme["main_bg"], text_color=theme["header_fg"])
+
+        self.left_frame.configure(fg_color=theme["panel_bg"])
+        self.log_label.configure(fg_color="transparent", text_color=theme["header_fg"])
+        self.text_area.configure(fg_color=theme["text_bg"], text_color=theme["text_fg"])
+
+        self.right_frame.configure(fg_color=theme["panel_bg"])
+        self.cart_label.configure(fg_color="transparent", text_color=theme["right_header_fg"])
+        self.cart_listbox.configure(fg_color=theme["list_bg"])
+        for row in self._cart_rows:
+            row.configure(fg_color=theme["list_bg"], text_color=theme["list_fg"])
+
         def style_btn(btn, bg_color):
-            btn.configure(bg=bg_color, fg="white", activebackground=bg_color, activeforeground=theme["btn_active_fg"])
+            btn.configure(fg_color=bg_color, text_color="white", hover_color=bg_color)
 
         style_btn(self.checkout_btn, theme["btn_checkout_bg"])
         style_btn(self.clear_btn, theme["btn_clear_bg"])
         style_btn(self.view_rented_btn, theme["btn_view_bg"])
         style_btn(self.closing_btn, theme["btn_closing_bg"])
-        
+
         toggle_text = "☀️ LIGHT SYSTEM" if self.is_dark_mode else "🌙 DARK SYSTEM"
         self.toggle_btn.configure(
-            text=toggle_text, bg=theme["btn_toggle_bg"], fg=theme["btn_toggle_fg"],
-            activebackground=theme["btn_toggle_bg"], activeforeground=theme["btn_toggle_fg"]
+            text=toggle_text, fg_color=theme["btn_toggle_bg"], text_color=theme["btn_toggle_fg"],
+            hover_color=theme["btn_toggle_bg"]
         )
 
-        self.admin_label.configure(bg=theme["panel_bg"])
+        self.admin_label.configure(fg_color="transparent")
         self._update_admin_ui_colors()
 
     def _update_admin_ui_colors(self):
         theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
         if self.current_admin:
-            self.admin_label.configure(text=f"ADMIN: {self.current_admin['name'].upper()}", fg=theme["admin_logged_in"])
-            self.login_btn.configure(text="LOCK TERMINAL", bg=theme["btn_clear_bg"], fg="white", activebackground=theme["btn_clear_bg"])
+            self.admin_label.configure(text=f"ADMIN: {self.current_admin['name'].upper()}", text_color=theme["admin_logged_in"])
+            self.login_btn.configure(text="LOCK TERMINAL", fg_color=theme["btn_clear_bg"], text_color="white", hover_color=theme["btn_clear_bg"])
         else:
-            self.admin_label.configure(text="ADMIN: OFFLINE", fg=theme["admin_logged_out"])
-            self.login_btn.configure(text="AUTHENTICATE", bg=theme["btn_checkout_bg"], fg="white", activebackground=theme["btn_checkout_bg"])
+            self.admin_label.configure(text="ADMIN: OFFLINE", text_color=theme["admin_logged_out"])
+            self.login_btn.configure(text="AUTHENTICATE", fg_color=theme["btn_checkout_bg"], text_color="white", hover_color=theme["btn_checkout_bg"])
 
     def log(self, msg):
-        self.root.after(0, self._log_gui, msg)
+        self.dispatch(self._log_gui, msg)
 
     def _log_gui(self, msg):
         self.text_area.configure(state='normal')
@@ -212,23 +239,27 @@ class AppGUI:
     # --- CUSTOM MODAL REPLACEMENTS ---
     def ask_string(self, title, prompt):
         self.event.clear()
-        self.root.after(0, self._custom_ask_string_gui, title, prompt)
+        self.dispatch(self._custom_ask_string_gui, title, prompt)
         self.event.wait()
         return self.result
 
     def _custom_ask_string_gui(self, title, prompt):
-        modal = tk.Toplevel(self.root)
+        modal = ctk.CTkToplevel(self.root)
         modal.title(title)
         self.center_window(modal, 450, 220)
-        modal.transient(self.root) 
-        modal.grab_set() 
+        modal.transient(self.root)
+        modal.grab_set()
+        modal.lift()
+        modal.attributes("-topmost", True)
+        modal.after_idle(lambda: modal.attributes("-topmost", False))
+        modal.focus_force()
 
         theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
-        modal.configure(bg=theme["panel_bg"])
+        modal.configure(fg_color=theme["panel_bg"])
 
-        tk.Label(modal, text=prompt, font=("Segoe UI", 12), bg=theme["panel_bg"], fg=theme["list_fg"], wraplength=400, justify="center").pack(pady=(20, 15))
-        
-        entry = tk.Entry(modal, font=("Segoe UI", 14), bg=theme["text_bg"], fg=theme["text_fg"], insertbackground=theme["text_fg"], bd=1, relief="flat", highlightbackground=theme["btn_toggle_bg"], highlightthickness=1)
+        ctk.CTkLabel(modal, text=prompt, font=ctk.CTkFont("Segoe UI", 12), text_color=theme["list_fg"], wraplength=400, justify="center").pack(pady=(20, 15))
+
+        entry = ctk.CTkEntry(modal, font=ctk.CTkFont("Segoe UI", 14), fg_color=theme["text_bg"], text_color=theme["text_fg"], border_color=theme["btn_toggle_bg"], border_width=1, corner_radius=6)
         entry.pack(fill="x", padx=40, pady=(0, 20))
         entry.focus_set()
 
@@ -246,29 +277,33 @@ class AppGUI:
         modal.bind('<Return>', submit)
         modal.protocol("WM_DELETE_WINDOW", cancel)
 
-        btn_frame = tk.Frame(modal, bg=theme["panel_bg"])
+        btn_frame = ctk.CTkFrame(modal, fg_color=theme["panel_bg"])
         btn_frame.pack(fill="x", padx=40)
-        tk.Button(btn_frame, text="SUBMIT", command=submit, bg=theme["btn_checkout_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=5).pack(side="left", expand=True, fill="x", padx=(0, 5))
-        tk.Button(btn_frame, text="CANCEL", command=cancel, bg=theme["btn_toggle_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=5).pack(side="right", expand=True, fill="x", padx=(5, 0))
+        ctk.CTkButton(btn_frame, text="SUBMIT", command=submit, fg_color=theme["btn_checkout_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=36).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        ctk.CTkButton(btn_frame, text="CANCEL", command=cancel, fg_color=theme["btn_toggle_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=36).pack(side="right", expand=True, fill="x", padx=(5, 0))
 
     def ask_yes_no(self, title, prompt):
         self.event.clear()
-        self.root.after(0, self._custom_ask_yes_no_gui, title, prompt)
+        self.dispatch(self._custom_ask_yes_no_gui, title, prompt)
         self.event.wait()
         return self.result
 
     def _custom_ask_yes_no_gui(self, title, prompt):
-        modal = tk.Toplevel(self.root)
+        modal = ctk.CTkToplevel(self.root)
         modal.title(title)
         self.center_window(modal, 450, 220)
-        modal.transient(self.root) 
-        modal.grab_set() 
+        modal.transient(self.root)
+        modal.grab_set()
+        modal.lift()
+        modal.attributes("-topmost", True)
+        modal.after_idle(lambda: modal.attributes("-topmost", False))
+        modal.focus_force()
 
         theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
-        modal.configure(bg=theme["panel_bg"])
+        modal.configure(fg_color=theme["panel_bg"])
 
-        tk.Label(modal, text=prompt, font=("Segoe UI", 12), bg=theme["panel_bg"], fg=theme["list_fg"], wraplength=400, justify="center").pack(pady=(30, 25), expand=True)
-        
+        ctk.CTkLabel(modal, text=prompt, font=ctk.CTkFont("Segoe UI", 12), text_color=theme["list_fg"], wraplength=400, justify="center").pack(pady=(30, 25), expand=True)
+
         def yes():
             self.result = True
             modal.destroy()
@@ -281,51 +316,53 @@ class AppGUI:
 
         modal.protocol("WM_DELETE_WINDOW", no)
 
-        btn_frame = tk.Frame(modal, bg=theme["panel_bg"])
+        btn_frame = ctk.CTkFrame(modal, fg_color=theme["panel_bg"])
         btn_frame.pack(fill="x", padx=40, pady=(0, 20))
-        tk.Button(btn_frame, text="YES / PROCEED", command=yes, bg=theme["btn_checkout_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
-        tk.Button(btn_frame, text="NO / ABORT", command=no, bg=theme["btn_clear_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=8).pack(side="right", expand=True, fill="x", padx=(5, 0))
+        ctk.CTkButton(btn_frame, text="YES / PROCEED", command=yes, fg_color=theme["btn_checkout_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=40).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        ctk.CTkButton(btn_frame, text="NO / ABORT", command=no, fg_color=theme["btn_clear_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=40).pack(side="right", expand=True, fill="x", padx=(5, 0))
 
-    # --- NEW: Unified Return & Strike Menu ---
-    def ask_return_asset(self, item, renter):
+    # --- Unified Return & Strike Menu ---
+    def ask_return_asset(self, item_name, renter_name, previous_condition):
         self.event.clear()
-        self.root.after(0, self._show_return_modal, item, renter)
+        self.dispatch(self._show_return_modal, item_name, renter_name, previous_condition)
         self.event.wait()
         return self.result
 
-    def _show_return_modal(self, item, renter):
-        modal = tk.Toplevel(self.root)
+    def _show_return_modal(self, item_name, renter_name, previous_condition):
+        modal = ctk.CTkToplevel(self.root)
         modal.title("ASSET RETURN")
         self.center_window(modal, 500, 420)
-        modal.transient(self.root) 
-        modal.grab_set() 
+        modal.transient(self.root)
+        modal.grab_set()
+        modal.lift()
+        modal.attributes("-topmost", True)
+        modal.after_idle(lambda: modal.attributes("-topmost", False))
+        modal.focus_force()
 
         theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
-        modal.configure(bg=theme["panel_bg"])
+        modal.configure(fg_color=theme["panel_bg"])
 
-        tk.Label(modal, text="📥 ASSET RETURN CHECK-IN", font=("Segoe UI", 16, "bold"), bg=theme["panel_bg"], fg=theme["header_fg"]).pack(pady=(20, 10))
-        tk.Label(modal, text=f"Asset: {item['name']}", font=("Segoe UI", 12), bg=theme["panel_bg"], fg=theme["list_fg"]).pack()
-        tk.Label(modal, text=f"Assigned To: {renter['name']}", font=("Segoe UI", 12), bg=theme["panel_bg"], fg=theme["list_fg"]).pack(pady=(0, 15))
+        ctk.CTkLabel(modal, text="📥 ASSET RETURN CHECK-IN", font=ctk.CTkFont("Segoe UI", 16, weight="bold"), text_color=theme["header_fg"]).pack(pady=(20, 10))
+        ctk.CTkLabel(modal, text=f"Asset: {item_name}", font=ctk.CTkFont("Segoe UI", 12), text_color=theme["list_fg"]).pack()
+        ctk.CTkLabel(modal, text=f"Assigned To: {renter_name}", font=ctk.CTkFont("Segoe UI", 12), text_color=theme["list_fg"]).pack(pady=(0, 15))
 
         # Condition Input
-        tk.Label(modal, text="Asset Condition:", font=("Segoe UI", 11, "bold"), bg=theme["panel_bg"], fg=theme["list_fg"]).pack()
-        cond_entry = tk.Entry(modal, font=("Segoe UI", 12), bg=theme["text_bg"], fg=theme["text_fg"], insertbackground=theme["text_fg"], bd=1, relief="flat", highlightbackground=theme["btn_toggle_bg"], highlightthickness=1)
-        
-        # --- UPDATED: Grab previous condition, default to Pristine if none exists ---
-        previous_condition = item.get('condition') or "Pristine"
-        cond_entry.insert(0, previous_condition)
-        
+        ctk.CTkLabel(modal, text="Asset Condition:", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), text_color=theme["list_fg"]).pack()
+        cond_entry = ctk.CTkEntry(modal, font=ctk.CTkFont("Segoe UI", 12), fg_color=theme["text_bg"], text_color=theme["text_fg"], border_color=theme["btn_toggle_bg"], border_width=1, corner_radius=6)
+
+        cond_entry.insert(0, previous_condition or "Pristine")
+
         cond_entry.pack(fill="x", padx=50, pady=(0, 20))
 
         # Strike Input
-        tk.Label(modal, text="Disciplinary Strike (Leave blank if none):", font=("Segoe UI", 11, "bold"), bg=theme["panel_bg"], fg=theme["admin_logged_out"]).pack()
-        strike_entry = tk.Entry(modal, font=("Segoe UI", 12), bg=theme["text_bg"], fg=theme["text_fg"], insertbackground=theme["text_fg"], bd=1, relief="flat", highlightbackground=theme["admin_logged_out"], highlightthickness=1)
+        ctk.CTkLabel(modal, text="Disciplinary Strike (Leave blank if none):", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), text_color=theme["admin_logged_out"]).pack()
+        strike_entry = ctk.CTkEntry(modal, font=ctk.CTkFont("Segoe UI", 12), fg_color=theme["text_bg"], text_color=theme["text_fg"], border_color=theme["admin_logged_out"], border_width=1, corner_radius=6)
         strike_entry.pack(fill="x", padx=50, pady=(0, 25))
 
         def confirm():
             self.result = {
-                "proceed": True, 
-                "condition": cond_entry.get().strip() or "Unverified", 
+                "proceed": True,
+                "condition": cond_entry.get().strip() or "Unverified",
                 "strike_reason": strike_entry.get().strip()
             }
             modal.destroy()
@@ -338,45 +375,47 @@ class AppGUI:
 
         modal.protocol("WM_DELETE_WINDOW", cancel)
 
-        btn_frame = tk.Frame(modal, bg=theme["panel_bg"])
+        btn_frame = ctk.CTkFrame(modal, fg_color=theme["panel_bg"])
         btn_frame.pack(fill="x", padx=40, pady=(0, 20))
-        tk.Button(btn_frame, text="SECURE ASSET", command=confirm, bg=theme["btn_checkout_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=10).pack(side="left", expand=True, fill="x", padx=(0, 5))
-        tk.Button(btn_frame, text="CANCEL", command=cancel, bg=theme["btn_toggle_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=10).pack(side="right", expand=True, fill="x", padx=(5, 0))
+        ctk.CTkButton(btn_frame, text="SECURE ASSET", command=confirm, fg_color=theme["btn_checkout_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=44).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        ctk.CTkButton(btn_frame, text="CANCEL", command=cancel, fg_color=theme["btn_toggle_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=44).pack(side="right", expand=True, fill="x", padx=(5, 0))
 
     # --- Profile Confirmation Modal ---
-    def ask_profile_confirmation(self, user, cart_size):
+    def ask_profile_confirmation(self, name, renting_count, strikes, cart_size):
         self.event.clear()
-        self.root.after(0, self._show_profile_modal, user, cart_size)
+        self.dispatch(self._show_profile_modal, name, renting_count, strikes, cart_size)
         self.event.wait()
         return self.result
 
-    def _show_profile_modal(self, user, cart_size):
-        modal = tk.Toplevel(self.root)
+    def _show_profile_modal(self, name, renting_count, strikes, cart_size):
+        modal = ctk.CTkToplevel(self.root)
         modal.title("USER PROFILE REVIEW")
         self.center_window(modal, 450, 380)
-        modal.transient(self.root) 
-        modal.grab_set() 
+        modal.transient(self.root)
+        modal.grab_set()
+        modal.lift()
+        modal.attributes("-topmost", True)
+        modal.after_idle(lambda: modal.attributes("-topmost", False))
+        modal.focus_force()
 
         theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
-        modal.configure(bg=theme["panel_bg"])
+        modal.configure(fg_color=theme["panel_bg"])
 
-        renting_count = len(user.get('currently_renting') or [])
-        strikes = user.get('strike_history') or []
         strike_count = len(strikes)
         strike_color = theme["admin_logged_out"] if strike_count > 0 else theme["admin_logged_in"]
 
-        tk.Label(modal, text="🛡️ PRE-DEPLOYMENT REVIEW 🛡️", font=("Segoe UI", 16, "bold"), bg=theme["panel_bg"], fg=theme["header_fg"]).pack(pady=(20, 15))
-        tk.Label(modal, text=f"USER ALIAS: {user['name'].upper()}", font=("Segoe UI", 14, "bold"), bg=theme["panel_bg"], fg=theme["list_fg"]).pack(pady=5)
-        tk.Label(modal, text=f"CURRENT ASSETS OUT: {renting_count}", font=("Segoe UI", 12), bg=theme["panel_bg"], fg=theme["list_fg"]).pack(pady=5)
-        tk.Label(modal, text=f"STRIKES ON RECORD: {strike_count}", font=("Segoe UI", 14, "bold"), bg=theme["panel_bg"], fg=strike_color).pack(pady=5)
+        ctk.CTkLabel(modal, text="🛡️ PRE-DEPLOYMENT REVIEW 🛡️", font=ctk.CTkFont("Segoe UI", 16, weight="bold"), text_color=theme["header_fg"]).pack(pady=(20, 15))
+        ctk.CTkLabel(modal, text=f"USER ALIAS: {name.upper()}", font=ctk.CTkFont("Segoe UI", 14, weight="bold"), text_color=theme["list_fg"]).pack(pady=5)
+        ctk.CTkLabel(modal, text=f"CURRENT ASSETS OUT: {renting_count}", font=ctk.CTkFont("Segoe UI", 12), text_color=theme["list_fg"]).pack(pady=5)
+        ctk.CTkLabel(modal, text=f"STRIKES ON RECORD: {strike_count}", font=ctk.CTkFont("Segoe UI", 14, weight="bold"), text_color=strike_color).pack(pady=5)
 
         if strike_count > 0:
             latest_strike = strikes[-1]
             if len(latest_strike) > 40:
                 latest_strike = latest_strike[:40] + "..."
-            tk.Label(modal, text=f"Latest Strike: {latest_strike}", font=("Consolas", 10, "italic"), bg=theme["panel_bg"], fg=theme["admin_logged_out"]).pack(pady=5)
+            ctk.CTkLabel(modal, text=f"Latest Strike: {latest_strike}", font=ctk.CTkFont("Consolas", 10, slant="italic"), text_color=theme["admin_logged_out"]).pack(pady=5)
 
-        tk.Label(modal, text=f"Attempting to deploy {cart_size} new asset(s).", font=("Segoe UI", 11, "italic"), bg=theme["panel_bg"], fg=theme["btn_view_bg"]).pack(pady=(15, 10))
+        ctk.CTkLabel(modal, text=f"Attempting to deploy {cart_size} new asset(s).", font=ctk.CTkFont("Segoe UI", 11, slant="italic"), text_color=theme["btn_view_bg"]).pack(pady=(15, 10))
 
         def proceed():
             self.result = True
@@ -390,10 +429,10 @@ class AppGUI:
 
         modal.protocol("WM_DELETE_WINDOW", cancel)
 
-        btn_frame = tk.Frame(modal, bg=theme["panel_bg"])
+        btn_frame = ctk.CTkFrame(modal, fg_color=theme["panel_bg"])
         btn_frame.pack(fill="x", pady=20, padx=20)
-        tk.Button(btn_frame, text="AUTHORIZE", command=proceed, bg=theme["btn_checkout_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=8).pack(side="left", expand=True, fill="x", padx=5)
-        tk.Button(btn_frame, text="DENY", command=cancel, bg=theme["btn_clear_bg"], fg="white", font=("Segoe UI", 11, "bold"), cursor="hand2", pady=8).pack(side="right", expand=True, fill="x", padx=5)
+        ctk.CTkButton(btn_frame, text="AUTHORIZE", command=proceed, fg_color=theme["btn_checkout_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=40).pack(side="left", expand=True, fill="x", padx=5)
+        ctk.CTkButton(btn_frame, text="DENY", command=cancel, fg_color=theme["btn_clear_bg"], text_color="white", font=ctk.CTkFont("Segoe UI", 11, weight="bold"), cursor="hand2", corner_radius=6, height=40).pack(side="right", expand=True, fill="x", padx=5)
 
     # --- Admin Authentication ---
     def prompt_login_thread(self):
@@ -402,13 +441,13 @@ class AppGUI:
     def _process_login(self):
         if self.current_admin:
             self.current_admin = None
-            self.root.after(0, self._update_admin_ui_colors)
+            self.dispatch(self._update_admin_ui_colors)
             self.log("\n[-] Admin logged out. Terminal Locked.")
             return
 
         self.log("\n[WAIT] Awaiting Admin ID scan...")
         a_id = self.ask_string("Authentication", "Scan or enter Admin ID to unlock terminal:")
-        
+
         if not a_id:
             self.log("Authentication cancelled.")
             return
@@ -416,81 +455,78 @@ class AppGUI:
         if len(a_id) > 9:
             a_id = a_id[1:9]
 
-        res = supabase.table("Admins").select("*").eq("id", a_id).execute()
-        if res.data:
-            self.current_admin = res.data[0]
-            self.root.after(0, self._update_admin_ui_colors)
+        profile = get_profile_by_card(a_id)
+        if profile and profile.get("is_admin"):
+            self.current_admin = {"id": profile["id"], "name": profile.get("full_name") or "Admin"}
+            self.dispatch(self._update_admin_ui_colors)
             self.log(f"\n[+] Authorization accepted. Welcome, {self.current_admin['name']}. Terminal Unlocked.")
         else:
-            self.log("\n[!] Authorization failed: Invalid Admin ID.")
-            # Fallback to standard yes/no for errors if needed, or just log
-            self.ask_yes_no("Security Alert", "Admin ID not recognized in database. Authorization Denied.")
+            self.log("\n[!] Authorization failed: Invalid or non-admin card.")
+            self.ask_yes_no("Security Alert", "Admin card not recognized. Authorization Denied.")
 
     # --- Closing Protocol (Nightlock) ---
     def closing_protocol_thread(self):
-        if not self.current_admin:
-            self.ask_yes_no("Access Denied", "Terminal locked. Admin credentials required to initiate Closing Protocol.")
-            return
         threading.Thread(target=self._process_closing, daemon=True).start()
 
     def _process_closing(self):
+        if not self.current_admin:
+            self.ask_yes_no("Access Denied", "Terminal locked. Admin credentials required to initiate Closing Protocol.")
+            return
+
         self.log("\n[WAIT] Initiating NIGHTLOCK Closing Protocol...")
         confirm = self.ask_yes_no(
-            "NIGHTLOCK PROTOCOL", 
+            "NIGHTLOCK PROTOCOL",
             "WARNING: Executing this protocol will issue strikes to ALL users currently holding unreturned assets and dispatch a Discord webhook report.\n\nProceed with Closing Protocol?"
         )
-        
+
         if not confirm:
             self.log("[-] Protocol aborted.")
             return
 
         try:
-            res_items = supabase.table("Inventory").select("id, name, last_rented_person").eq("is_rented", True).execute()
-            rented_items = res_items.data
+            res = (
+                supabase.table("inventory_checkouts")
+                .select("id, item_id, user_id, inventory_items(name), profiles!user_id(full_name)")
+                .is_("checked_in_at", "null")
+                .execute()
+            )
+            open_checkouts = res.data
 
-            if not rented_items:
+            if not open_checkouts:
                 self.log("[+] Nightlock Complete: 0 assets outstanding. All equipment secured.")
                 if discord_webhook_url:
                     requests.post(discord_webhook_url, json={"content": "🛡️ **NIGHTLOCK COMPLETE**: All LATech Esports assets are safely secured. Goodnight!"})
                 return
 
-            res_users = supabase.table("Users").select("*").execute()
-            users_with_items = [u for u in res_users.data if u.get('currently_renting')]
+            by_user = {}
+            for co in open_checkouts:
+                uid = co["user_id"]
+                uname = (co.get("profiles") or {}).get("full_name") or "Unknown User"
+                iname = (co.get("inventory_items") or {}).get("name") or "Unknown Asset"
+                bucket = by_user.setdefault(uid, {"name": uname, "items": []})
+                bucket["items"].append((co["item_id"], iname))
 
-            if not users_with_items:
-                self.log("[!] Database Anomaly: Items marked rented, but no user profiles hold them.")
-                return
+            self.log(f"\n>> Issuing automated strikes for {len(open_checkouts)} missing assets...")
 
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             report_lines = []
+            strike_rows = []
+            for uid, info in by_user.items():
+                item_names = [name for _, name in info["items"]]
+                for item_id, iname in info["items"]:
+                    strike_rows.append({
+                        "user_id": uid,
+                        "item_id": item_id,
+                        "reason": f"Forgot to return {iname}",
+                    })
+                report_lines.append(f"• **{info['name']}** failed to return: *{', '.join(item_names)}*")
+                self.log(f"[!] Applied {len(info['items'])} strike(s) to {info['name']}.")
 
-            self.log(f"\n>> Issuing automated strikes for {len(rented_items)} missing assets...")
-
-            for user in users_with_items:
-                item_ids = user['currently_renting']
-                user_items = [item for item in rented_items if item['id'] in item_ids]
-                
-                if not user_items:
-                    continue
-
-                user_strikes = user.get('strike_history') or []
-                missing_item_names = []
-                
-                for item in user_items:
-                    missing_item_names.append(item['name'])
-                    strike_reason = f"Forgot to return {item['name']}"
-                    user_strikes.append(f"[{timestamp}] {strike_reason}")
-                
-                supabase.table("Users").update({"strike_history": user_strikes}).eq("id", user['id']).execute()
-                
-                item_list_str = ", ".join(missing_item_names)
-                report_lines.append(f"• **{user['name']}** failed to return: *{item_list_str}*")
-                self.log(f"[!] Applied {len(user_items)} strike(s) to {user['name']}.")
+            supabase.table("inventory_strikes").insert(strike_rows).execute()
 
             if discord_webhook_url:
                 webhook_content = "🚨 **LATECH ESPORTS NIGHTLOCK REPORT** 🚨\nThe following users failed to return their equipment before closing and have been automatically issued strikes:\n\n"
                 webhook_content += "\n".join(report_lines)
-                
+
                 response = requests.post(discord_webhook_url, json={"content": webhook_content})
                 if response.status_code in [200, 204]:
                     self.log("[SUCCESS] Webhook transmitted to Discord.")
@@ -504,24 +540,30 @@ class AppGUI:
 
     # --- Database View Operations ---
     def view_rented_items_thread(self):
-        if not self.current_admin:
-            self.ask_yes_no("Access Denied", "Terminal locked. Admin credentials required.")
-            return
         threading.Thread(target=self._process_view_rented, daemon=True).start()
 
     def _process_view_rented(self):
+        if not self.current_admin:
+            self.ask_yes_no("Access Denied", "Terminal locked. Admin credentials required.")
+            return
+
         self.log("\n[WAIT] Interrogating database for deployed assets...")
         try:
-            res = supabase.table("Inventory").select("name, last_rented_person").eq("is_rented", True).execute()
-            rented_items = res.data
+            res = (
+                supabase.table("inventory_checkouts")
+                .select("inventory_items(name), profiles!user_id(full_name)")
+                .is_("checked_in_at", "null")
+                .execute()
+            )
+            rows = res.data
 
-            if not rented_items:
+            if not rows:
                 self.log("\n[-] All assets currently secured in inventory.")
             else:
-                self.log(f"\n=== DEPLOYED ASSETS ({len(rented_items)}) ===")
-                for item in rented_items:
-                    item_name = item.get("name", "Unknown Asset")
-                    renter = item.get("last_rented_person", "Unknown Renter")
+                self.log(f"\n=== DEPLOYED ASSETS ({len(rows)}) ===")
+                for row in rows:
+                    item_name = (row.get("inventory_items") or {}).get("name") or "Unknown Asset"
+                    renter = (row.get("profiles") or {}).get("full_name") or "Unknown Renter"
                     self.log(f" >> {item_name.ljust(20)} | {renter}")
                 self.log("===============================")
         except Exception as e:
@@ -533,27 +575,36 @@ class AppGUI:
             self.log(f"[*] {item['name']} already detected in staging.")
             return
         self.cart.append(item)
-        self.cart_listbox.insert(tk.END, f"  {item['name']}")
+        theme = self.themes["dark"] if self.is_dark_mode else self.themes["light"]
+        row = ctk.CTkLabel(
+            self.cart_listbox, text=f"  {item['name']}", font=self.log_font, anchor="w",
+            fg_color=theme["list_bg"], text_color=theme["list_fg"]
+        )
+        row.pack(fill="x", pady=2)
+        self._cart_rows.append(row)
         self.log(f"[+] Staged '{item['name']}' for deployment.")
 
     def clear_cart(self):
         self.cart.clear()
-        self.cart_listbox.delete(0, tk.END)
+        for row in self._cart_rows:
+            row.destroy()
+        self._cart_rows.clear()
         self.log("[-] Staging area purged.")
 
     def checkout_cart_thread(self):
+        threading.Thread(target=self._process_checkout, daemon=True).start()
+
+    def _process_checkout(self):
         if not self.current_admin:
             self.ask_yes_no("Access Denied", "Terminal locked. Admin credentials required for deployment.")
             return
         if not self.cart:
             self.ask_yes_no("Empty Staging", "Staging area is empty. Scan assets first.")
             return
-        threading.Thread(target=self._process_checkout, daemon=True).start()
 
-    def _process_checkout(self):
         self.log("\n[WAIT] Awaiting User ID for deployment...")
         u_id = self.ask_string("User Scan", f"Deploying {len(self.cart)} assets.\nScan or enter USER CARD ID:")
-        
+
         if not u_id:
             self.log("Deployment cancelled.")
             return
@@ -561,121 +612,188 @@ class AppGUI:
         if len(u_id) > 9:
             u_id = u_id[1:9]
 
-        user = get_user(u_id) or register_user(u_id)
-        if not user:
+        profile = get_or_register_user_by_card(u_id)
+        if not profile:
             self.log("Deployment failed: User matrix error.")
             return
 
-        proceed = self.ask_profile_confirmation(user, len(self.cart))
+        renting_count = count_open_checkouts(profile["id"])
+        strikes = get_strike_history(profile["id"])
+        proceed = self.ask_profile_confirmation(profile["full_name"], renting_count, strikes, len(self.cart))
         if not proceed:
-            self.log(f"Deployment to {user['name']} denied by Admin.")
+            self.log(f"Deployment to {profile['full_name']} denied by Admin.")
             return
 
-        current_items = user.get('currently_renting') or []
-        new_item_ids = [item['id'] for item in self.cart if item['id'] not in current_items]
-        
-        if not new_item_ids:
-            self.log("All staged assets already assigned to this user.")
-            self.root.after(0, self.clear_cart)
-            return
-
-        current_items.extend(new_item_ids)
-        supabase.table("Users").update({"currently_renting": current_items}).eq("id", user['id']).execute()
-
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        admin_name = self.current_admin['name']
+        admin_id = self.current_admin["id"]
+        current_time = datetime.now(timezone.utc).isoformat()
+        checked_out_count = 0
 
         for item in self.cart:
-            if item['id'] in new_item_ids:
-                history = item.get('rental_history') or []
-                history.append(f"{user['name']}/{current_time}/PENDING/Out:{admin_name}")
-                
-                supabase.table("Inventory").update({
-                    "is_rented": True,
-                    "last_rented_person": user['name'],
-                    "rental_history": history
-                }).eq("id", item['id']).execute()
-        
-        self.log(f"\n[SUCCESS] Deployed {len(new_item_ids)} asset(s) to {user['name']}.")
-        self.root.after(0, self.clear_cart)
+            if get_open_checkout(item["id"]):
+                self.log(f"'{item['name']}' is already checked out; skipping.")
+                continue
+
+            supabase.table("inventory_checkouts").insert({
+                "item_id": item["id"],
+                "user_id": profile["id"],
+                "checked_out_at": current_time,
+                "checked_out_by": admin_id,
+            }).execute()
+
+            supabase.table("inventory_items").update({
+                "is_rented": True,
+                "last_rented_person": profile["id"],
+            }).eq("id", item["id"]).execute()
+
+            checked_out_count += 1
+
+        if checked_out_count:
+            self.log(f"\n[SUCCESS] Deployed {checked_out_count} asset(s) to {profile['full_name']}.")
+        else:
+            self.log("All staged assets already assigned to this user.")
+
+        self.dispatch(self.clear_cart)
 
 
 # --- Core Logic ---
-def get_user(user_id: str):
-    res = supabase.table("Users").select("*").eq("id", user_id).execute()
+def get_profile(profile_id: str):
+    res = supabase.table("profiles").select("*").eq("id", profile_id).execute()
     return res.data[0] if res.data else None
+
+def get_profile_by_card(card_id: str):
+    res = (
+        supabase.table("inventory_card_links")
+        .select("profile_id, profiles(*)")
+        .eq("card_id", card_id)
+        .execute()
+    )
+    return res.data[0]["profiles"] if res.data else None
+
+def link_card_to_profile(card_id: str, profile_id: str):
+    supabase.table("inventory_card_links").upsert(
+        {"card_id": card_id, "profile_id": profile_id}, on_conflict="card_id"
+    ).execute()
+
+def create_shadow_profile(name: str):
+    # Kiosk-provisioned account: no real login is ever expected, it only exists
+    # to satisfy the profiles -> auth.users foreign key for card-based lookups.
+    shadow_email = f"kiosk-{uuid.uuid4().hex}@inventory.local"
+    auth_res = supabase.auth.admin.create_user({
+        "email": shadow_email,
+        "password": uuid.uuid4().hex,
+        "email_confirm": True,
+        "user_metadata": {"full_name": name, "provisioned_via": "inventory_kiosk"},
+    })
+    new_id = auth_res.user.id
+    supabase.table("profiles").upsert(
+        {"id": new_id, "full_name": name, "is_admin": False}, on_conflict="id"
+    ).execute()
+    return get_profile(new_id)
+
+def get_or_register_user_by_card(card_id: str):
+    profile = get_profile_by_card(card_id)
+    if profile:
+        return profile
+
+    gui.log(f"\n[!] Card {card_id} unassigned.")
+    name = gui.ask_string("Register User", "Enter alias for new LATech Esports user registration:")
+    if not name:
+        return None
+
+    profile = create_shadow_profile(name)
+    link_card_to_profile(card_id, profile["id"])
+    gui.log(f"User '{name}' added to matrix.")
+    return profile
 
 def get_item(item_uuid: str):
-    res = supabase.table("Inventory").select("*").eq("id", item_uuid).execute()
+    res = supabase.table("inventory_items").select("*").eq("id", item_uuid).execute()
     return res.data[0] if res.data else None
 
-def register_user(user_id: str):
-    gui.log(f"\n[!] User ID {user_id} unassigned.")
-    name = gui.ask_string("Register User", "Enter alias for new LATech Esports user registration:")
-    if name:
-        new_user = {"id": user_id, "name": name, "currently_renting": [], "strike_history": []}
-        supabase.table("Users").insert(new_user).execute()
-        gui.log(f"User '{name}' added to matrix.")
-        return new_user
-    return None
+def get_open_checkout(item_id: str):
+    res = (
+        supabase.table("inventory_checkouts")
+        .select("*")
+        .eq("item_id", item_id)
+        .is_("checked_in_at", "null")
+        .order("checked_out_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+def get_strike_history(profile_id: str):
+    res = (
+        supabase.table("inventory_strikes")
+        .select("reason, issued_at")
+        .eq("user_id", profile_id)
+        .order("issued_at")
+        .execute()
+    )
+    return [f"[{s['issued_at']}] {s['reason']}" for s in res.data]
+
+def count_open_checkouts(profile_id: str):
+    res = (
+        supabase.table("inventory_checkouts")
+        .select("id", count="exact")
+        .eq("user_id", profile_id)
+        .is_("checked_in_at", "null")
+        .execute()
+    )
+    return res.count or 0
 
 def handle_existing_item(item):
     gui.log(f"\n--- ASSET DETECTED ---")
     gui.log(f"ID: {item['name']}")
-    
-    renter_res = supabase.table("Users").select("*").contains("currently_renting", [item['id']]).execute()
-    renter = renter_res.data[0] if renter_res.data else None
 
-    if renter:
-        gui.log(f"STATUS: [ DEPLOYED ] -> {renter['name']}")
-        
-        # New Combined Return & Strike Modal
-        return_data = gui.ask_return_asset(item, renter)
-        
+    checkout = get_open_checkout(item["id"])
+
+    if checkout:
+        renter = get_profile(checkout["user_id"])
+        renter_name = renter["full_name"] if renter else "Unknown"
+        gui.log(f"STATUS: [ DEPLOYED ] -> {renter_name}")
+
+        return_data = gui.ask_return_asset(item["name"], renter_name, item.get("condition"))
+
         if return_data and return_data.get("proceed"):
             condition = return_data.get("condition")
             strike_reason = return_data.get("strike_reason")
-            admin_name = gui.current_admin['name']
+            admin_id = gui.current_admin["id"]
+            admin_name = gui.current_admin["name"]
 
-            # Process Strike if field was filled out
-            if strike_reason:
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-                user_strikes = renter.get('strike_history') or []
-                user_strikes.append(f"[{timestamp}] {strike_reason} (Asset: {item['name']})")
-                supabase.table("Users").update({"strike_history": user_strikes}).eq("id", renter['id']).execute()
-                gui.log(f"[!] Strike recorded on {renter['name']}'s profile.")
-                
-                # Independent Strike Webhook Request
+            if strike_reason and renter:
+                supabase.table("inventory_strikes").insert({
+                    "user_id": renter["id"],
+                    "item_id": item["id"],
+                    "reason": strike_reason,
+                    "issued_by": admin_id,
+                }).execute()
+                gui.log(f"[!] Strike recorded on {renter_name}'s profile.")
+
                 if discord_webhook_url:
-                    webhook_content = f"⚠️ **STRIKE ISSUED** ⚠️\n**User:** {renter['name']}\n**Asset:** {item['name']}\n**Reason:** {strike_reason}\n**Issued By:** {admin_name}"
+                    webhook_content = f"⚠️ **STRIKE ISSUED** ⚠️\n**User:** {renter_name}\n**Asset:** {item['name']}\n**Reason:** {strike_reason}\n**Issued By:** {admin_name}"
                     requests.post(discord_webhook_url, json={"content": webhook_content})
 
-            # Process Return Check-in
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-            history = item.get('rental_history') or []
-            if history:
-                history[-1] = history[-1].replace("PENDING", f"{current_time}/In:{admin_name}")
+            supabase.table("inventory_checkouts").update({
+                "checked_in_at": datetime.now(timezone.utc).isoformat(),
+                "checked_in_by": admin_id,
+                "condition_at_return": condition,
+            }).eq("id", checkout["id"]).execute()
 
-            new_list = [i for i in renter['currently_renting'] if i != item['id']]
-            supabase.table("Users").update({"currently_renting": new_list}).eq("id", renter['id']).execute()
-            
-            update_payload = {
+            supabase.table("inventory_items").update({
                 "is_rented": False,
-                "rental_history": history,
-                "condition": condition
-            }
+                "condition": condition,
+            }).eq("id", item["id"]).execute()
 
-            supabase.table("Inventory").update(update_payload).eq("id", item['id']).execute()
             gui.log(f"Asset '{item['name']}' secured by {admin_name}. Condition logged: {condition}.")
-            
+
     else:
-        current_condition = item.get('condition', 'Unverified')
-        gui.log(f"STATUS: [ SECURED/AVAILABLE ] (Prior Assignment: {item.get('last_rented_person', 'None')})")
+        current_condition = item.get('condition') or 'Unverified'
+        gui.log(f"STATUS: [ SECURED/AVAILABLE ]")
         gui.log(f"CONDITION: {current_condition}")
-        
+
         choice = gui.ask_yes_no("Stage Asset", f"Asset '{item['name']}' is available.\n\nStage for deployment?")
         if choice:
-            gui.root.after(0, gui.add_to_cart, item)
+            gui.dispatch(gui.add_to_cart, item)
 
 def process_tag(tag):
     if not gui.current_admin:
@@ -703,18 +821,17 @@ def process_tag(tag):
 def flash_new_item(tag, existing_uuid=None):
     new_uuid = existing_uuid or str(uuid.uuid4())
     name = gui.ask_string("Register Asset", "Enter designation for NEW asset:")
-    if not name: 
+    if not name:
         gui.log("Hardware flashing aborted.")
         return
 
     try:
         if tag.ndef:
             tag.ndef.records = [ndef.TextRecord(new_uuid)]
-            supabase.table("Inventory").insert({
-                "id": new_uuid, 
+            supabase.table("inventory_items").insert({
+                "id": new_uuid,
                 "name": name,
-                "condition": "Pristine", 
-                "rental_history": []
+                "condition": "Pristine",
             }).execute()
             gui.log(f"Hardware flashed. Asset '{name}' synchronized.")
     except Exception as e:
@@ -724,7 +841,7 @@ def flash_new_item(tag, existing_uuid=None):
 def nfc_worker():
     clf = None
     connection_paths = ['tty:serial0', 'usb']
-    
+
     for path in connection_paths:
         try:
             gui.log(f"Initializing NFC hardware bridge via {path}...")
@@ -734,7 +851,7 @@ def nfc_worker():
                 break
         except IOError:
             continue
-            
+
     if not clf:
         gui.log("CRITICAL: Hardware bridge failed. Verify NFC reader connection and OS permissions.")
         return
@@ -754,7 +871,7 @@ def nfc_worker():
             clf.close()
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = ctk.CTk()
     gui = AppGUI(root)
     worker_thread = threading.Thread(target=nfc_worker, daemon=True)
     worker_thread.start()

@@ -1,0 +1,6 @@
+supabase>=2.4.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+nfcpy>=1.0.4
+ndeflib>=0.3.3
+customtkinter>=5.2.0
