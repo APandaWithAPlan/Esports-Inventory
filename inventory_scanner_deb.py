@@ -669,14 +669,26 @@ def get_profile_by_card(card_id: str):
     )
     return res.data[0]["profiles"] if res.data else None
 
+def get_profile_by_cwid(cwid: str):
+    # card_id IS the person's CWID (see the [1:9] slice where this is read),
+    # so this also catches someone who already has a real profile — e.g. they
+    # registered for the scavenger hunt website before ever visiting the
+    # rental desk — so we link their existing profile instead of creating a
+    # second, disconnected shadow account for the same person.
+    res = supabase.table("profiles").select("*").eq("cwid", cwid).execute()
+    return res.data[0] if res.data else None
+
 def link_card_to_profile(card_id: str, profile_id: str):
     supabase.table("inventory_card_links").upsert(
         {"card_id": card_id, "profile_id": profile_id}, on_conflict="card_id"
     ).execute()
 
-def create_shadow_profile(name: str):
+def create_shadow_profile(name: str, cwid: str):
     # Kiosk-provisioned account: no real login is ever expected, it only exists
     # to satisfy the profiles -> auth.users foreign key for card-based lookups.
+    # Storing cwid here (not just on the card link) is what lets the hunt
+    # website find and absorb this account later if the same person registers
+    # there with a real email.
     shadow_email = f"kiosk-{uuid.uuid4().hex}@inventory.local"
     auth_res = supabase.auth.admin.create_user({
         "email": shadow_email,
@@ -686,7 +698,7 @@ def create_shadow_profile(name: str):
     })
     new_id = auth_res.user.id
     supabase.table("profiles").upsert(
-        {"id": new_id, "full_name": name, "is_admin": False}, on_conflict="id"
+        {"id": new_id, "full_name": name, "is_admin": False, "cwid": cwid}, on_conflict="id"
     ).execute()
     return get_profile(new_id)
 
@@ -695,12 +707,18 @@ def get_or_register_user_by_card(card_id: str):
     if profile:
         return profile
 
+    existing = get_profile_by_cwid(card_id)
+    if existing:
+        link_card_to_profile(card_id, existing["id"])
+        gui.log(f"Card linked to existing profile for '{existing.get('full_name') or 'Unknown'}'.")
+        return existing
+
     gui.log(f"\n[!] Card {card_id} unassigned.")
     name = gui.ask_string("Register User", "Enter alias for new LATech Esports user registration:")
     if not name:
         return None
 
-    profile = create_shadow_profile(name)
+    profile = create_shadow_profile(name, card_id)
     link_card_to_profile(card_id, profile["id"])
     gui.log(f"User '{name}' added to matrix.")
     return profile
